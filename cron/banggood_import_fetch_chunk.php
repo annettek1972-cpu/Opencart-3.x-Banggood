@@ -56,6 +56,11 @@ $verbose = ($verbose === '1' || strtolower((string)$verbose) === 'true');
 $importMode = strtolower((string)bg_arg($argv, 'import-mode', 'id'));
 if (!in_array($importMode, ['id', 'url', 'auto'], true)) $importMode = 'id';
 
+// Ensure oc_product_variant + stock_status_token get refreshed.
+// NOTE: In this module, variants are generated in importProductById() via applyStocksToProduct().
+$ensureVariants = bg_arg($argv, 'ensure-variants', '1');
+$ensureVariants = ($ensureVariants === '1' || strtolower((string)$ensureVariants) === 'true');
+
 // If your admin folder is renamed, pass --admin-dir=your_admin_folder
 $adminDir = (string)bg_arg($argv, 'admin-dir', 'admin');
 $adminDir = trim($adminDir, "/ \t\n\r\0\x0B");
@@ -414,6 +419,7 @@ try {
         try {
             $res = null;
             $usedMode = $importMode;
+            $variantSync = false;
 
             // Try to locate a URL in the persisted row (raw_json) when using auto/url.
             $url = '';
@@ -436,6 +442,19 @@ try {
                 $res = $bgModel->importProductUrl($url);
             }
 
+            // IMPORTANT:
+            // Your module only updates oc_product_variant inside importProductById() (via protected applyStocksToProduct()).
+            // So if we imported via URL, run importProductById() after to refresh variants/stock tokens.
+            if ($ensureVariants && $usedMode !== 'id') {
+                try {
+                    $bgModel->importProductById($pid);
+                    $variantSync = true;
+                } catch (Throwable $e) {
+                    // If variant sync fails, treat as an import error so the queue is marked error.
+                    throw $e;
+                }
+            }
+
             if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
             $imported++;
 
@@ -456,7 +475,7 @@ try {
             elseif ($r === 'skip') $skipped++;
 
             if ($verbose) {
-                fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$usedMode} result=" . ($r !== '' ? $r : 'ok') . "\n");
+                fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$usedMode}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
             if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
