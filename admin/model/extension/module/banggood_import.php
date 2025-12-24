@@ -3113,6 +3113,24 @@ protected function apiRequestRawSimple($url) {
         $root = $dom->getElementById('bg_desc_root');
         if (!$root) return $html;
 
+        // Build a full catalog base URL so description images are stored as FULL URLs (per request).
+        $catalog_base = '';
+        try {
+            if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) $catalog_base = (string)HTTPS_CATALOG;
+            elseif (defined('HTTP_CATALOG') && HTTP_CATALOG) $catalog_base = (string)HTTP_CATALOG;
+            else {
+                $cfg_ssl = $this->config->get('config_ssl');
+                $cfg_url = $this->config->get('config_url');
+                $catalog_base = $cfg_ssl ? (string)$cfg_ssl : (string)$cfg_url;
+            }
+        } catch (\Throwable $e) {}
+        $catalog_base = $catalog_base ? rtrim($catalog_base, '/\\') . '/' : '';
+        $toFullImageUrl = function($rel) use ($catalog_base) {
+            $rel = ltrim((string)$rel, '/\\');
+            // OpenCart serves images under /image/<rel>
+            return $catalog_base ? ($catalog_base . 'image/' . $rel) : ('image/' . $rel);
+        };
+
         $folder = 'catalog/' . self::PRODUCT_CODE_PREFIX . preg_replace('/[^0-9A-Za-z_.-]/', '_', (string)$bg_id) . '/desc/';
         $img_dir = rtrim(DIR_IMAGE, '/\\') . DIRECTORY_SEPARATOR . $folder;
         if (!is_dir($img_dir)) @mkdir($img_dir, 0777, true);
@@ -3127,27 +3145,54 @@ protected function apiRequestRawSimple($url) {
         foreach ($nodes as $img) {
             if (!$img instanceof DOMElement) continue;
             $src = trim((string)$img->getAttribute('src'));
+
+            // If src is missing/placeholder, try common lazy attributes and srcset.
+            if ($src === '' || stripos($src, 'data:') === 0) {
+                $lazy_attrs = array(
+                    'data-src','data-original','data-lazy-src','data-actualsrc','data-url','data-img','data-echo','data-image','data-zoom-image',
+                    'data-srcset','srcset'
+                );
+                foreach ($lazy_attrs as $a) {
+                    $cand = trim((string)$img->getAttribute($a));
+                    if ($cand === '') continue;
+                    // srcset: "url1 1x, url2 2x" => take first URL
+                    if (stripos($a, 'srcset') !== false) {
+                        $parts = preg_split('/\s*,\s*/', $cand);
+                        $cand = isset($parts[0]) ? trim((string)$parts[0]) : $cand;
+                        $cand = preg_split('/\s+/', $cand)[0];
+                    }
+                    if ($cand !== '' && stripos($cand, 'data:') !== 0) { $src = $cand; break; }
+                }
+            }
+
             if ($src === '') continue;
 
             // protocol-relative
             if (strpos($src, '//') === 0) $src = 'https:' . $src;
-            if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) continue;
+            // prefer https for remote
+            if (stripos($src, 'http://') === 0) $src = 'https://' . substr($src, 7);
 
-            // Only Banggood-hosted images
-            $host = '';
-            $p = @parse_url($src);
-            if (is_array($p) && !empty($p['host'])) $host = strtolower($p['host']);
-            if ($host === '' || strpos($host, 'banggood.com') === false) continue;
-
-            $norm = preg_replace('/(\?.*)$/', '', $src);
-            if (isset($seen[$norm])) {
-                $img->setAttribute('src', 'image/' . ltrim($seen[$norm], '/'));
+            // If this already points to our local image path, ensure it's a FULL URL and skip downloading.
+            if (preg_match('#^(?:https?://[^/]+/)?image/(.+)$#i', $src, $mLocal)) {
+                $img->setAttribute('src', $toFullImageUrl($mLocal[1]));
+                continue;
+            }
+            if (preg_match('#^(?:https?://[^/]+/)?(catalog/.+)$#i', $src, $mCat)) {
+                $img->setAttribute('src', $toFullImageUrl($mCat[1]));
                 continue;
             }
 
-            $file_name = self::PRODUCT_CODE_PREFIX . preg_replace('/[^0-9A-Za-z_.-]/', '_', (string)$bg_id) . '-DESC-' . $idx . '.jpg';
+            // Only download absolute remote URLs (after normalization).
+            if (stripos($src, 'https://') !== 0 && stripos($src, 'http://') !== 0) continue;
+
+            $norm = preg_replace('/(\?.*)$/', '', $src);
+            if (isset($seen[$norm])) {
+                $img->setAttribute('src', $toFullImageUrl($seen[$norm]));
+                continue;
+            }
+
+            $base_name = self::PRODUCT_CODE_PREFIX . preg_replace('/[^0-9A-Za-z_.-]/', '_', (string)$bg_id) . '-DESC-' . $idx;
             $idx++;
-            $local_path = $img_dir . $file_name;
 
             $data = null;
             try {
@@ -3170,16 +3215,36 @@ protected function apiRequestRawSimple($url) {
             }
             if ($data === null) continue;
 
-            // Write as JPEG for consistency
-            $ok = $this->writeJpegFromData($data, $local_path);
-            if (!$ok) @file_put_contents($local_path, $data);
+            // Prefer JPEG output when possible; otherwise save in the original format
+            $jpg_name = $base_name . '.jpg';
+            $jpg_path = $img_dir . $jpg_name;
+            $okJpg = $this->writeJpegFromData($data, $jpg_path);
+
+            $file_name = $jpg_name;
+            $local_path = $jpg_path;
+
+            if (!$okJpg) {
+                // Determine mime/ext for raw write so browser can display it.
+                $ext = 'jpg';
+                $info = @getimagesizefromstring($data);
+                $mime = (is_array($info) && !empty($info['mime'])) ? strtolower((string)$info['mime']) : '';
+                if ($mime === 'image/png') $ext = 'png';
+                elseif ($mime === 'image/gif') $ext = 'gif';
+                elseif ($mime === 'image/webp') $ext = 'webp';
+                elseif ($mime === 'image/jpeg' || $mime === 'image/jpg') $ext = 'jpg';
+
+                $file_name = $base_name . '.' . $ext;
+                $local_path = $img_dir . $file_name;
+                @file_put_contents($local_path, $data);
+            }
+
             if (!is_file($local_path) || filesize($local_path) < 100) continue;
 
             $rel = $this->toRelativeImagePath($folder . $file_name);
             if (!$rel) continue;
 
             $seen[$norm] = $rel;
-            $img->setAttribute('src', 'image/' . ltrim($rel, '/'));
+            $img->setAttribute('src', $toFullImageUrl($rel));
         }
 
         // Return inner HTML
