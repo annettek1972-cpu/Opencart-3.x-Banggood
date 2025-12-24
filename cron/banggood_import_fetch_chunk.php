@@ -1,0 +1,346 @@
+<?php
+/**
+ * Banggood Import - cron fetch/import chunk runner (OpenCart 3.x)
+ *
+ * Goal:
+ * - Run the same "Fetch next N products" logic from cron/CLI
+ * - Without needing an admin login/session/user_token
+ * - Without changing existing module button behavior
+ *
+ * Usage:
+ *   php cron/banggood_import_fetch_chunk.php --chunk-size=10
+ *   php cron/banggood_import_fetch_chunk.php --chunk-size=10 --reset-cursor=1
+ *
+ * Notes:
+ * - Must be placed in your OpenCart store root under /cron/
+ * - Requires a standard OpenCart 3.x installation (admin/config.php + system/startup.php)
+ */
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    echo "Forbidden: CLI only.\n";
+    exit(1);
+}
+
+// --- args ---
+function bg_arg(array $argv, string $name, $default = null) {
+    $prefix = '--' . $name . '=';
+    foreach ($argv as $a) {
+        if (strpos($a, $prefix) === 0) {
+            return substr($a, strlen($prefix));
+        }
+    }
+    return $default;
+}
+
+$chunkSize = (int)bg_arg($argv, 'chunk-size', '10');
+if ($chunkSize < 1) $chunkSize = 1;
+if ($chunkSize > 500) $chunkSize = 500;
+
+$resetCursor = bg_arg($argv, 'reset-cursor', '0');
+$resetCursor = ($resetCursor === '1' || strtolower((string)$resetCursor) === 'true');
+
+// If your admin folder is renamed, pass --admin-dir=your_admin_folder
+$adminDir = (string)bg_arg($argv, 'admin-dir', 'admin');
+$adminDir = trim($adminDir, "/ \t\n\r\0\x0B");
+if ($adminDir === '') $adminDir = 'admin';
+
+// --- bootstrap OpenCart (admin side) ---
+$root = realpath(__DIR__ . '/..');
+if (!$root) {
+    fwrite(STDERR, "Unable to resolve store root.\n");
+    exit(1);
+}
+
+$adminConfig = $root . '/' . $adminDir . '/config.php';
+if (!is_file($adminConfig)) {
+    fwrite(STDERR, "Missing admin config at: {$adminConfig}\n");
+    fwrite(STDERR, "This script must live in your OpenCart store root under /cron/.\n");
+    fwrite(STDERR, "If your admin folder is renamed, pass --admin-dir=YOUR_ADMIN_FOLDER\n");
+    exit(1);
+}
+
+require_once $adminConfig;
+
+if (!defined('DIR_SYSTEM')) {
+    fwrite(STDERR, "DIR_SYSTEM not defined after loading admin/config.php\n");
+    exit(1);
+}
+
+$startup = rtrim(DIR_SYSTEM, '/\\') . '/startup.php';
+if (!is_file($startup)) {
+    fwrite(STDERR, "Missing startup.php at: {$startup}\n");
+    exit(1);
+}
+
+require_once $startup;
+
+// Registry + core services (minimal set needed by models)
+$registry = new Registry();
+
+$config = new Config();
+$registry->set('config', $config);
+
+// DB
+try {
+    $db = new DB(DB_DRIVER, DB_HOSTNAME, DB_USERNAME, DB_PASSWORD, DB_DATABASE, DB_PORT);
+} catch (Throwable $e) {
+    fwrite(STDERR, "DB connection failed: " . $e->getMessage() . "\n");
+    exit(1);
+}
+$registry->set('db', $db);
+
+// Load settings into config (replicates startup/setting)
+try {
+    $q = $db->query("SELECT * FROM `" . DB_PREFIX . "setting` WHERE `store_id` = 0");
+    foreach ($q->rows as $row) {
+        $key = (string)$row['key'];
+        $value = (string)$row['value'];
+        if (!empty($row['serialized'])) {
+            $config->set($key, json_decode($value, true));
+        } else {
+            $config->set($key, $value);
+        }
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, "Failed to load settings: " . $e->getMessage() . "\n");
+    exit(1);
+}
+
+$loader = new Loader($registry);
+$registry->set('load', $loader);
+
+$request = new Request();
+$registry->set('request', $request);
+
+$response = new Response();
+$registry->set('response', $response);
+
+// Optional but common dependencies used by many models/helpers
+try {
+    $registry->set('event', new Event($registry));
+} catch (Throwable $e) {
+    // ignore
+}
+try {
+    // Many core models expect cache to exist; file cache is the safest default for cron.
+    $registry->set('cache', new Cache('file', 3600));
+} catch (Throwable $e) {
+    // ignore
+}
+try {
+    // Some helpers/models reference session; create a minimal session for compatibility.
+    $session = new Session('file');
+    $session->start();
+    $registry->set('session', $session);
+} catch (Throwable $e) {
+    // ignore
+}
+try {
+    $registry->set('log', new Log((string)$config->get('error_filename')));
+} catch (Throwable $e) {
+    // ignore
+}
+
+// --- helpers (mostly lifted from the controller behavior) ---
+function bg_fetch_category_rows(DB $db, string $shortTable): array {
+    $fullTable = DB_PREFIX . $shortTable;
+    try {
+        $q = $db->query("SHOW TABLES LIKE '" . $db->escape($fullTable) . "'");
+        if (!$q->num_rows) return [];
+
+        $cols = $db->query("SHOW COLUMNS FROM `" . $db->escape($fullTable) . "`");
+        if (!$cols->num_rows) return [];
+
+        $available = [];
+        foreach ($cols->rows as $c) $available[] = $c['Field'];
+
+        $idCandidates = ['bg_cat_id', 'cat_id', 'category_id', 'id', 'bgc_id'];
+        $idCol = null;
+        foreach ($idCandidates as $c) {
+            if (in_array($c, $available, true)) {
+                $idCol = $c;
+                break;
+            }
+        }
+        if (!$idCol) return [];
+
+        $qr = $db->query("SELECT `" . $db->escape($idCol) . "` AS cat_id FROM `" . $db->escape($fullTable) . "` ORDER BY `" . $db->escape($idCol) . "`");
+        return $qr->rows;
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+function bg_read_cursor(Config $config): array {
+    $cursorRaw = $config->get('module_banggood_import_fetch_cursor');
+    $cursor = ['category_index' => 0, 'page' => 1, 'offset' => 0];
+    if (is_string($cursorRaw) && $cursorRaw !== '') {
+        $decoded = @json_decode($cursorRaw, true);
+        if (is_array($decoded)) {
+            $cursor['category_index'] = isset($decoded['category_index']) ? max(0, (int)$decoded['category_index']) : 0;
+            $cursor['page'] = isset($decoded['page']) ? max(1, (int)$decoded['page']) : 1;
+            $cursor['offset'] = isset($decoded['offset']) ? max(0, (int)$decoded['offset']) : 0;
+        }
+    }
+    return $cursor;
+}
+
+// --- run ---
+try {
+    // Models needed
+    $loader->model('extension/module/banggood_import');
+    $loader->model('setting/setting');
+
+    /** @var ModelExtensionModuleBanggoodImport $bgModel */
+    $bgModel = $registry->get('model_extension_module_banggood_import');
+    /** @var ModelSettingSetting $settingModel */
+    $settingModel = $registry->get('model_setting_setting');
+
+    if ($resetCursor) {
+        $cursorNew = json_encode(['category_index' => 0, 'page' => 1, 'offset' => 0]);
+        if (method_exists($settingModel, 'editSettingValue')) {
+            $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
+        } else {
+            $cur = $settingModel->getSetting('module_banggood_import');
+            if (!is_array($cur)) $cur = [];
+            $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
+            $settingModel->editSetting('module_banggood_import', $cur);
+        }
+        echo "Cursor reset.\n";
+    }
+
+    $cursor = bg_read_cursor($config);
+    $category_index = (int)$cursor['category_index'];
+    $page = (int)$cursor['page'];
+    $offset = (int)$cursor['offset'];
+
+    $rows = bg_fetch_category_rows($db, 'bg_category');
+    if (!$rows) $rows = bg_fetch_category_rows($db, 'bg_category_import');
+    if (!$rows) {
+        fwrite(STDERR, "No Banggood categories available to iterate (bg_category / bg_category_import empty).\n");
+        exit(2);
+    }
+
+    $total_categories = count($rows);
+    $collected = [];
+
+    $next_category_index = $category_index;
+    $next_page = $page;
+    $next_offset = $offset;
+    $finished = false;
+
+    // Banggood docs: 20 products max per page.
+    $api_page_size = 20;
+
+    for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunkSize; $ci++) {
+        $cat_id = isset($rows[$ci]['cat_id']) ? (string)$rows[$ci]['cat_id'] : '';
+        if ($cat_id === '') continue;
+
+        $currentPage = ($ci === $category_index) ? $page : 1;
+        $currentOffset = ($ci === $category_index) ? $offset : 0;
+        $page_total = 0;
+
+        while (count($collected) < $chunkSize) {
+            $res = $bgModel->fetchProductList($cat_id, $currentPage, $api_page_size);
+            if (!$res || (!empty($res['errors']) && is_array($res['errors']))) {
+                break;
+            }
+
+            $products = (!empty($res['products']) && is_array($res['products'])) ? $res['products'] : [];
+            if (!$products) break;
+
+            $remaining = $chunkSize - count($collected);
+            $slice = array_slice($products, $currentOffset, $remaining);
+            foreach ($slice as $p) {
+                $collected[] = $p;
+                if (count($collected) >= $chunkSize) break;
+            }
+
+            $page_total = isset($res['page_total']) ? (int)$res['page_total'] : 0;
+            $currentOffset += count($slice);
+
+            if ($currentOffset >= count($products)) {
+                $currentPage++;
+                $currentOffset = 0;
+            }
+
+            if ($page_total > 0 && $currentPage > $page_total) {
+                break;
+            }
+        }
+
+        if (count($collected) >= $chunkSize) {
+            $next_category_index = $ci;
+            $next_page = $currentPage;
+            $next_offset = $currentOffset;
+
+            // If we moved past the last page for this category, advance category.
+            if ($page_total > 0 && $next_page > $page_total) {
+                $next_category_index = $ci + 1;
+                $next_page = 1;
+                $next_offset = 0;
+            }
+            break;
+        }
+
+        // exhausted this category, move on to next
+        $next_category_index = $ci + 1;
+        $next_page = 1;
+        $next_offset = 0;
+    }
+
+    if ($next_category_index >= $total_categories) {
+        $finished = true;
+    }
+
+    // Persist fetched products into bg_fetched_products
+    $persisted = (int)$bgModel->saveFetchedProducts($collected);
+
+    // Import immediately (matching the current button behavior)
+    $imported = 0;
+    $import_errors = 0;
+    foreach ($collected as $p) {
+        $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
+        if ($pid === '') continue;
+        try {
+            $bgModel->importProductById($pid);
+            if (method_exists($bgModel, 'markFetchedProductImported')) {
+                $bgModel->markFetchedProductImported($pid);
+            }
+            $imported++;
+        } catch (Throwable $e) {
+            if (method_exists($bgModel, 'markFetchedProductError')) {
+                $bgModel->markFetchedProductError($pid, $e->getMessage());
+            }
+            $import_errors++;
+        }
+    }
+
+    // Save updated cursor
+    $cursorNew = json_encode(['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset]);
+    if (method_exists($settingModel, 'editSettingValue')) {
+        $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
+    } else {
+        $cur = $settingModel->getSetting('module_banggood_import');
+        if (!is_array($cur)) $cur = [];
+        $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
+        $settingModel->editSetting('module_banggood_import', $cur);
+    }
+
+    echo "Fetched=" . count($collected) .
+         " Persisted=" . $persisted .
+         " Imported=" . $imported .
+         " Errors=" . $import_errors .
+         " Finished=" . ($finished ? "1" : "0") . "\n";
+    echo "NextCursor=" . $cursorNew . "\n";
+
+    // exit code: non-zero if we imported nothing due to errors/fetch issue is not necessarily failure
+    exit(0);
+} catch (Throwable $e) {
+    fwrite(STDERR, "Cron failed: " . $e->getMessage() . "\n");
+    exit(1);
+}
+
