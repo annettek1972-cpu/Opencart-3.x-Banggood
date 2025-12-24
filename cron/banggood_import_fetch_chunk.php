@@ -212,6 +212,22 @@ try {
     // ignore
 }
 
+// Language (some core models expect $this->language to exist)
+try {
+    if (class_exists('Language')) {
+        $langCode = (string)$config->get('config_language');
+        $langCode = $langCode !== '' ? $langCode : 'en-gb';
+        $language = new Language($langCode);
+        // Load the base language pack file, e.g. admin/language/en-gb/en-gb.php
+        if (method_exists($language, 'load')) {
+            $language->load($langCode);
+        }
+        $registry->set('language', $language);
+    }
+} catch (Throwable $e) {
+    // ignore
+}
+
 // --- helpers (mostly lifted from the controller behavior) ---
 function bg_fetch_category_rows(DB $db, string $shortTable): array {
     $fullTable = DB_PREFIX . $shortTable;
