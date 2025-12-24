@@ -1,0 +1,507 @@
+;(function(){
+  'use strict';
+
+  // Legacy script (OV-based). It fights the newer `bg_variants.js` and causes flicker.
+  // Keep it OFF by default; enable only for debugging by setting:
+  //   window.bgVariantUseLegacy = true
+  try {
+    if (typeof window !== 'undefined' && window.bgVariantUseLegacy !== true) return;
+  } catch (e) { return; }
+
+  // Globals (populated at init)
+  var VARIANTS = [];
+  var BG_STATUS_MAP = {};
+  var BG_WH_MAP = {};
+
+  // Caches / indices
+  var VARIANT_MAP = {};            // option_key -> { qty, row, parts }
+  var OPTION_TO_VARIANT_KEYS = {}; // option_value_id -> [option_key, ...]
+  var PVID_TO_OVID = {};          // product_option_value_id -> option_value_id
+  var IGNORED_OPTION_NAMES = [];   // names to ignore (ship-from)
+
+  // Remember last non-empty status text so we can reuse it when resolution returns null
+  var LAST_KNOWN_STATUS = '';
+
+  // Simple label constants — change here if you want localized text
+  var LABEL_IN_STOCK = 'In Stock';
+  var LABEL_OUT_OF_STOCK = 'Out of Stock';
+  var DEFAULT_STATUS_FOR_SINGLE = 'ships in 24 hours';
+
+  function canonicalKeyFromIds(ids){
+    if (!ids || !ids.length) return '';
+    var nums = [];
+    for (var i=0;i<ids.length;i++){
+      var n = parseInt(String(ids[i]).trim(),10);
+      if (!isNaN(n) && n > 0) nums.push(n);
+    }
+    if (!nums.length) return '';
+    nums.sort(function(a,b){ return a-b; });
+    return nums.join('|');
+  }
+
+  function buildVariantIndices(){
+    VARIANT_MAP = {};
+    OPTION_TO_VARIANT_KEYS = {};
+    if (!Array.isArray(VARIANTS)) return;
+    for (var vi=0; vi<VARIANTS.length; vi++){
+      var v = VARIANTS[vi];
+      if (!v || !v.option_key) continue;
+      var key = String(v.option_key);
+      var qty = parseInt(v.quantity,10) || 0;
+      var parts = key.split('|');
+      VARIANT_MAP[key] = { qty: qty, row: v, parts: parts };
+      for (var p=0; p<parts.length; p++){
+        var ov = parts[p];
+        if (!OPTION_TO_VARIANT_KEYS[ov]) OPTION_TO_VARIANT_KEYS[ov] = [];
+        OPTION_TO_VARIANT_KEYS[ov].push(key);
+      }
+    }
+    Object.keys(OPTION_TO_VARIANT_KEYS).forEach(function(k){
+      OPTION_TO_VARIANT_KEYS[k].sort();
+    });
+  }
+
+  function buildPovToOvMap(){
+    var map = {};
+    try {
+      var optNodes = document.querySelectorAll('#product select option, select[name^="option["] option');
+      for (var i=0;i<optNodes.length;i++){
+        var opt = optNodes[i];
+        var v = opt.value;
+        var ov = opt.getAttribute('data-ov') || (opt.dataset && opt.dataset.ov);
+        if (v && ov) map[String(v)] = String(ov);
+      }
+      var inputs = document.querySelectorAll('#product input[name^="option["], input[name^="option["]');
+      for (var j=0;j<inputs.length;j++){
+        var inp = inputs[j];
+        var vv = inp.value;
+        var ovv = inp.getAttribute('data-ov') || (inp.dataset && inp.dataset.ov);
+        if (vv && ovv) map[String(vv)] = String(ovv);
+      }
+    } catch(e){}
+    PVID_TO_OVID = map;
+  }
+
+  function detectIgnoredOptionNames(){
+    var names = {};
+    try {
+      var groups = {};
+      var selects = document.querySelectorAll('select[name^="option["]');
+      for (var s=0;s<selects.length;s++) groups[selects[s].name] = selects[s];
+      var inputs = document.querySelectorAll('input[name^="option["]');
+      for (var r=0;r<inputs.length;r++) groups[inputs[r].name] = inputs[r];
+
+      Object.keys(groups).forEach(function(name){
+        var el = groups[name];
+        var labelText = '';
+        try {
+          var anc = el.closest && el.closest('.form-group, .option, .product-option, .form-group-option');
+          if (anc) {
+            var lab = anc.querySelector && (anc.querySelector('label') || anc.querySelector('.option-label') || anc.querySelector('.title-categorysub'));
+            if (lab) labelText = (lab.textContent||'').trim();
+          }
+        } catch(e){}
+        if (!labelText){
+          var prev = el.previousElementSibling; if (prev) labelText = (prev.textContent||'').trim();
+        }
+        if (labelText && /ship/i.test(labelText)) { names[name] = true; return; }
+
+        var count=0, countryLike=0;
+        if (el.tagName === 'SELECT'){
+          var opts = el.options;
+          for (var k=0;k<opts.length;k++){
+            var t = (opts[k].textContent||opts[k].value||'').trim();
+            if (!t) continue;
+            count++;
+            if (/^[A-Z]{2}$/.test(t) || /china|cn|usa|us|uk|ship/i.test(t)) countryLike++;
+          }
+        } else {
+          var groupInputs = document.querySelectorAll('input[name="'+name+'"]');
+          for (var m=0;m<groupInputs.length;m++){
+            var parent = groupInputs[m].closest && groupInputs[m].closest('label');
+            var text = (parent && parent.textContent) ? parent.textContent.trim() : (groupInputs[m].value||'').trim();
+            if (!text) continue;
+            count++;
+            if (/^[A-Z]{2}$/.test(text) || /china|cn|usa|us|uk|ship/i.test(text)) countryLike++;
+          }
+        }
+        if (count>0 && countryLike >= Math.ceil(count/2)) names[name] = true;
+      });
+    } catch(e){}
+    IGNORED_OPTION_NAMES = Object.keys(names);
+  }
+
+  function intersectVariantKeyLists(selectedIds){
+    if (!selectedIds || !selectedIds.length) return [];
+    var lists = [];
+    for (var i=0;i<selectedIds.length;i++){
+      var id = String(selectedIds[i]);
+      var arr = OPTION_TO_VARIANT_KEYS[id];
+      if (!arr || !arr.length) return [];
+      lists.push(arr);
+    }
+    lists.sort(function(a,b){ return a.length - b.length; });
+    var base = lists[0].slice();
+    var result = [];
+    for (var j=0;j<base.length;j++){
+      var key = base[j];
+      var ok = true;
+      for (var t=1;t<lists.length;t++){
+        if (lists[t].indexOf(key) === -1) { ok = false; break; }
+      }
+      if (ok) result.push(key);
+    }
+    return result;
+  }
+
+  function collectSelectedOvIds(){
+    var ids = [], nameMap = {};
+    try {
+      var sels = document.querySelectorAll('select[name^="option["]');
+      for (var i=0;i<sels.length;i++){
+        var sel = sels[i];
+        var opt = sel.options[sel.selectedIndex];
+        if (!opt) continue;
+        var ov = opt.getAttribute('data-ov') || (opt.dataset && opt.dataset.ov);
+        if (ov) { ids.push(String(ov)); nameMap[sel.name] = String(ov); }
+        else if (opt.value) {
+          var mapped = PVID_TO_OVID[String(opt.value)];
+          if (mapped) { ids.push(String(mapped)); nameMap[sel.name] = String(mapped); }
+          else { ids.push(String(opt.value)); nameMap[sel.name] = String(opt.value); }
+        }
+      }
+      var inputs = document.querySelectorAll('input[name^="option["]');
+      for (var j=0;j<inputs.length;j++){
+        var inp = inputs[j];
+        if ((inp.type==='radio' || inp.type==='checkbox') && !inp.checked) continue;
+        var ov2 = inp.getAttribute('data-ov') || (inp.dataset && inp.dataset.ov);
+        if (ov2) { ids.push(String(ov2)); nameMap[inp.name] = String(ov2); }
+        else if (inp.value) {
+          var mapped2 = PVID_TO_OVID[String(inp.value)];
+          if (mapped2) { ids.push(String(mapped2)); nameMap[inp.name] = String(mapped2); }
+          else { ids.push(String(inp.value)); nameMap[inp.name] = String(inp.value); }
+        }
+      }
+    } catch(e){}
+    var out = [], seen = {};
+    for (var k=0;k<ids.length;k++){ if (!seen[ids[k]]) { out.push(ids[k]); seen[ids[k]] = true; } }
+    return { list: out, map: nameMap };
+  }
+
+  function expandBgStockMsg(token){
+    if (!token) return '';
+    var t = String(token).trim().toUpperCase();
+    var m;
+    m = t.match(/^LC_STOCK_MSG_EXPECT_(\d+)$/i);
+    if (m) { var d = parseInt(m[1],10); return 'Stock Expected In ' + (d===1? '1 day' : (d + ' days')); }
+    if (/^LC_STOCK_MSG_EXPECT$/i.test(t)) return LABEL_OUT_OF_STOCK;
+    m = t.match(/^LC_STOCK_MSG_(\d+)_DAYS$/i);
+    if (m) { return 'ships in ' + (parseInt(m[1],10) * 24) + ' hours'; }
+    m = t.match(/^LC_STOCK_MSG_(\d+)_HOURS$/i);
+    if (m) return 'ships in ' + parseInt(m[1],10) + ' hours';
+    if (t === 'AVAILABLE') return 'Available';
+    if (t === 'SOLD_OUT' || t === 'OUT_OF_STOCK') return LABEL_OUT_OF_STOCK;
+    if (t.indexOf('LC_STOCK_MSG_') === 0) {
+      var tail = t.slice('LC_STOCK_MSG_'.length).replace(/_/g,' ').toLowerCase();
+      return tail.split(' ').map(function(s){ return s.charAt(0).toUpperCase()+s.slice(1); }).join(' ');
+    }
+    return token;
+  }
+
+  function createStablePlaceholder(){
+    var original = document.getElementById('bg-poa-status');
+    if (!original) return null;
+    var existing = document.getElementById('bg-poa-status-variant');
+    if (existing) return existing;
+    try { original.style.display = 'none'; } catch(e){}
+    var stable = document.createElement('span'); stable.id = 'bg-poa-status-variant'; stable.style.display = ''; stable.style.whiteSpace = 'normal';
+    stable.textContent = original.getAttribute('data-default') || original.textContent || '';
+    original.parentNode.insertBefore(stable, original.nextSibling);
+    return stable;
+  }
+
+  function updateAddToCartState(qty){
+    var btn = document.querySelector('#button-cart') || document.querySelector('button[type="button"].btn-cart') || document.querySelector('input[type="button"]#button-cart');
+    if (!btn) return;
+    if (qty > 0) { btn.disabled = false; btn.classList.remove('disabled'); }
+    else { btn.disabled = true; btn.classList.add('disabled'); }
+  }
+
+  // resolve friendly status for a variant row or by selected parts
+  function resolveStatusTextForVariantRow(row, selectedParts){
+    if (row && row.stock_status_token) {
+      var s0 = expandBgStockMsg(row.stock_status_token);
+      if (s0) return s0;
+    }
+    try {
+      var parts = (row && row.option_key) ? String(row.option_key).split('|') : (row && row.parts ? row.parts : (selectedParts || []));
+      for (var i=0;i<parts.length;i++){
+        var pid = String(parts[i]);
+        if (BG_STATUS_MAP && BG_STATUS_MAP[pid]) {
+          var ss = expandBgStockMsg(BG_STATUS_MAP[pid]);
+          if (ss) return ss;
+        }
+        if (BG_WH_MAP && BG_WH_MAP[pid]) {
+          var first = BG_WH_MAP[pid];
+          if (Array.isArray(first)) first = first[0];
+          if (first) return String(first);
+        }
+      }
+    } catch(e){}
+    if (selectedParts && selectedParts.length) {
+      for (var j=0;j<selectedParts.length;j++){
+        var sid = String(selectedParts[j]);
+        if (BG_STATUS_MAP && BG_STATUS_MAP[sid]) {
+          var s2 = expandBgStockMsg(BG_STATUS_MAP[sid]);
+          if (s2) return s2;
+        }
+        if (BG_WH_MAP && BG_WH_MAP[sid]) {
+          var f = BG_WH_MAP[sid];
+          if (Array.isArray(f)) f = f[0];
+          if (f) return String(f);
+        }
+      }
+    }
+    // If still empty/null, return empty here — caller will use LAST_KNOWN_STATUS or default when appropriate
+    return '';
+  }
+
+  // Format display according to requested behavior:
+  // - qty == 0 -> "Out of Stock 0 In Stock"
+  // - qty > 0 and no significant status -> "4 In Stock"
+  // - if status is meaningful and not "In stock"/"Available", show "status qty In Stock"
+  // NOTE: this function expects statusText to be non-null (but may be empty string)
+  function formatStatusAndQty(statusText, qty) {
+    var st = (statusText || '').trim();
+
+    // If empty, caller may substitute LAST_KNOWN_STATUS or default
+    if (qty > 0) {
+      if (/ship|expect|expected/i.test(st)) {
+        return st + ' ' + qty + ' ' + LABEL_IN_STOCK;
+      }
+      if (/available/i.test(st)) {
+        return st + ' ' + qty + ' ' + LABEL_IN_STOCK;
+      }
+      if (/sold[_\s]*out|out[_\s]*of[_\s]*stock/i.test(st)) {
+        return qty + ' ' + LABEL_IN_STOCK;
+      }
+      if (st) return st + ' ' + qty + ' ' + LABEL_IN_STOCK;
+      if (qty === 1) return DEFAULT_STATUS_FOR_SINGLE + ' ' + qty + ' ' + LABEL_IN_STOCK;
+      return qty + ' ' + LABEL_IN_STOCK;
+    }
+
+    if (qty === 0) {
+      if (st) {
+        if (/sold[_\s]*out|out[_\s]*of[_\s]*stock/i.test(st)) {
+          return LABEL_OUT_OF_STOCK + ' ' + qty + ' ' + LABEL_IN_STOCK;
+        }
+        return st + ' ' + qty + ' ' + LABEL_IN_STOCK;
+      }
+      return LABEL_OUT_OF_STOCK + ' ' + qty + ' ' + LABEL_IN_STOCK;
+    }
+
+    return (st ? st + ' ' : '') + (qty > 0 ? qty + ' ' + LABEL_IN_STOCK : LABEL_OUT_OF_STOCK + ' 0 ' + LABEL_IN_STOCK);
+  }
+
+  function computeTextAndApply(){
+    var stable = createStablePlaceholder(); if (!stable) return;
+    var collected = collectSelectedOvIds(); var selected = collected.list; var nameMap = collected.map;
+    if (!selected || !selected.length) { var orig = document.getElementById('bg-poa-status'); stable.textContent = orig ? (orig.getAttribute('data-default') || orig.textContent || '') : ''; updateAddToCartState(1); return; }
+
+    var key = canonicalKeyFromIds(selected);
+    var exactQty = (key && VARIANT_MAP[key]) ? VARIANT_MAP[key].qty : null;
+
+    // ignore ship-from rule
+    if (IGNORED_OPTION_NAMES && IGNORED_OPTION_NAMES.length){
+      var reduced = selected.slice(0);
+      for (var i=0;i<IGNORED_OPTION_NAMES.length;i++){
+        var nm = IGNORED_OPTION_NAMES[i];
+        var ovv = nameMap[nm];
+        if (ovv){
+          var idx = reduced.indexOf(String(ovv));
+          if (idx !== -1) reduced.splice(idx,1);
+        }
+      }
+      if (reduced.length && reduced.length < selected.length){
+        var reducedKey = canonicalKeyFromIds(reduced);
+        if (reducedKey && VARIANT_MAP[reducedKey]){
+          var rQty = VARIANT_MAP[reducedKey].qty;
+          // If quantity is zero -> force Out of Stock (do NOT overwrite LAST_KNOWN_STATUS)
+          if (parseInt(rQty,10) === 0) {
+            stable.textContent = formatStatusAndQty(LABEL_OUT_OF_STOCK, 0);
+            updateAddToCartState(0);
+            return;
+          }
+          var statusText = resolveStatusTextForVariantRow(VARIANT_MAP[reducedKey].row, reduced);
+          // if empty, reuse last known; if still empty and single qty, use default
+          if (!statusText && LAST_KNOWN_STATUS) statusText = LAST_KNOWN_STATUS;
+          if (!statusText && rQty === 1) statusText = DEFAULT_STATUS_FOR_SINGLE;
+          if (statusText) LAST_KNOWN_STATUS = statusText;
+          stable.textContent = formatStatusAndQty(statusText, rQty);
+          updateAddToCartState(rQty);
+          return;
+        }
+      }
+    }
+
+    // exact exists -> display exact with status
+    if (exactQty !== null) {
+      var exactRow = VARIANT_MAP[key].row;
+      // If exact variant qty is zero -> force Out of Stock (do NOT overwrite LAST_KNOWN_STATUS)
+      if (parseInt(exactQty,10) === 0) {
+        stable.textContent = formatStatusAndQty(LABEL_OUT_OF_STOCK, 0);
+        updateAddToCartState(0);
+        return;
+      }
+      var statusExact = resolveStatusTextForVariantRow(exactRow, selected);
+      // fallback to last known then default for single
+      if (!statusExact && LAST_KNOWN_STATUS) statusExact = LAST_KNOWN_STATUS;
+      if (!statusExact && exactQty === 1) statusExact = DEFAULT_STATUS_FOR_SINGLE;
+      if (statusExact) LAST_KNOWN_STATUS = statusExact;
+      stable.textContent = formatStatusAndQty(statusExact, exactQty);
+      updateAddToCartState(exactQty);
+      return;
+    }
+
+    // fast candidate intersection (aggregate)
+    var candidateKeys = intersectVariantKeyLists(selected);
+    if (candidateKeys && candidateKeys.length){
+      var total = 0;
+      for (var c=0;c<candidateKeys.length;c++){
+        var k = candidateKeys[c];
+        total += (VARIANT_MAP[k] && VARIANT_MAP[k].qty) ? VARIANT_MAP[k].qty : 0;
+      }
+      // If aggregated total is zero -> force Out of Stock (do NOT overwrite LAST_KNOWN_STATUS)
+      if (parseInt(total,10) === 0) {
+        stable.textContent = formatStatusAndQty(LABEL_OUT_OF_STOCK, 0);
+        updateAddToCartState(0);
+        return;
+      }
+      var statusAgg = '';
+      for (var s=0;s<selected.length;s++){
+        var sid = String(selected[s]);
+        if (BG_STATUS_MAP && BG_STATUS_MAP[sid]) {
+          statusAgg = expandBgStockMsg(BG_STATUS_MAP[sid]);
+          if (statusAgg) break;
+        }
+      }
+      // fallback to last known, then default when total === 1
+      if (!statusAgg && LAST_KNOWN_STATUS) statusAgg = LAST_KNOWN_STATUS;
+      if (!statusAgg && total === 1) statusAgg = DEFAULT_STATUS_FOR_SINGLE;
+      if (statusAgg) LAST_KNOWN_STATUS = statusAgg;
+      stable.textContent = formatStatusAndQty(statusAgg, total);
+      updateAddToCartState(total);
+      return;
+    }
+
+    // BG maps fallback: check per-selected id maps
+    for (var j=0;j<selected.length;j++){
+      var sid = String(selected[j]);
+      if (BG_STATUS_MAP && BG_STATUS_MAP[sid]) {
+        var friendly = expandBgStockMsg(BG_STATUS_MAP[sid]);
+        if (!friendly && LAST_KNOWN_STATUS) friendly = LAST_KNOWN_STATUS;
+        if (friendly) { LAST_KNOWN_STATUS = friendly; stable.textContent = formatStatusAndQty(friendly, 1); updateAddToCartState(1); return; }
+      }
+      if (BG_WH_MAP && BG_WH_MAP[sid]) {
+        var first = BG_WH_MAP[sid];
+        if (Array.isArray(first)) first = first[0];
+        if (!first && LAST_KNOWN_STATUS) first = LAST_KNOWN_STATUS;
+        if (first) { LAST_KNOWN_STATUS = first; stable.textContent = formatStatusAndQty(first, 1); updateAddToCartState(1); return; }
+      }
+    }
+
+    // If we get here, nothing meaningful found — reuse last known if present, else show message
+    if (LAST_KNOWN_STATUS) {
+      stable.textContent = formatStatusAndQty(LAST_KNOWN_STATUS, 1);
+      updateAddToCartState(1);
+      return;
+    }
+
+    stable.textContent = 'No variant stock information available';
+    updateAddToCartState(1);
+  }
+
+  // Debounced change handler
+  var changeDeb = null;
+  function onOptionChangeDebounced(ms){
+    if (changeDeb) clearTimeout(changeDeb);
+    changeDeb = setTimeout(function(){ computeTextAndApply(); changeDeb = null; }, ms || 30);
+  }
+  document.addEventListener('change', function(e){
+    var t = e.target; if (!t || !t.name) return;
+    if (t.name.indexOf('option[') === 0) onOptionChangeDebounced(30);
+  }, true);
+
+  // Rebuild indices on structural mutation (debounced)
+  var rebuildTimer = null;
+  function scheduleRebuildIndexes(ms){
+    if (rebuildTimer) clearTimeout(rebuildTimer);
+    rebuildTimer = setTimeout(function(){
+      buildPovToOvMap();
+      detectIgnoredOptionNames();
+      buildVariantIndices();
+      computeTextAndApply();
+      rebuildTimer = null;
+    }, ms || 200);
+  }
+  try {
+    var productRoot = document.getElementById('product') || document;
+    var mo = new MutationObserver(function(muts){
+      scheduleRebuildIndexes(200);
+    });
+    mo.observe(productRoot, { childList: true, subtree: true });
+  } catch(e){}
+
+  // Initialization
+  function init(){
+    try { if (typeof window.bg_variants !== 'undefined' && Array.isArray(window.bg_variants)) VARIANTS = window.bg_variants;
+          else if (typeof bg_variants !== 'undefined' && Array.isArray(bg_variants)) VARIANTS = bg_variants; } catch(e){}
+    try { if (typeof window.bg_status_map_js !== 'undefined') { BG_STATUS_MAP = (typeof window.bg_status_map_js === 'string' ? JSON.parse(window.bg_status_map_js||'{}') : window.bg_status_map_js); }
+          else if (typeof window.bg_status_map !== 'undefined') BG_STATUS_MAP = window.bg_status_map; } catch(e){}
+    try { if (typeof window.bg_wh_map_js !== 'undefined') { BG_WH_MAP = (typeof window.bg_wh_map_js === 'string' ? JSON.parse(window.bg_wh_map_js||'{}') : window.bg_wh_map_js); }
+          else if (typeof window.bg_wh_map !== 'undefined') BG_WH_MAP = window.bg_wh_map; } catch(e){}
+
+    buildVariantIndices();
+    buildPovToOvMap();
+    detectIgnoredOptionNames();
+
+    // Initialize LAST_KNOWN_STATUS from the page if possible (strip numeric suffix like "4 In Stock")
+    try {
+      var initEl = document.getElementById('bg-poa-status') || document.getElementById('bg-poa-status-variant');
+      if (initEl) {
+        var t = (initEl.getAttribute('data-default') || initEl.textContent || '').trim();
+        if (t) {
+          var cleaned = t.replace(/\b\d+\s*(In Stock|In stock)?$/i, '').trim();
+          if (cleaned) LAST_KNOWN_STATUS = cleaned;
+        }
+      }
+    } catch(e){}
+
+    computeTextAndApply();
+
+    setTimeout(function(){ buildPovToOvMap(); detectIgnoredOptionNames(); buildVariantIndices(); computeTextAndApply(); }, 120);
+    setTimeout(function(){ buildPovToOvMap(); detectIgnoredOptionNames(); buildVariantIndices(); computeTextAndApply(); }, 600);
+  }
+
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+
+  // Debug helper
+  window.bgVariantStableDebug = function(){
+    try {
+      console.log('VARIANT_MAP count:', Object.keys(VARIANT_MAP).length);
+      console.log('OPTION_TO_VARIANT_KEYS sample:', Object.keys(OPTION_TO_VARIANT_KEYS).slice(0,20));
+      console.log('PVID_TO_OVID sample:', Object.keys(PVID_TO_OVID).slice(0,20).reduce(function(o,k){ o[k]=PVID_TO_OVID[k]; return o; }, {}));
+      var c = collectSelectedOvIds();
+      console.log('Selected OVs:', c.list);
+      console.log('Name->OV map:', c.map);
+      console.log('Ignored option names:', IGNORED_OPTION_NAMES);
+      console.log('Computed key:', canonicalKeyFromIds(c.list));
+      console.log('Exact match:', VARIANT_MAP[canonicalKeyFromIds(c.list)] || null);
+      console.log('Candidates:', intersectVariantKeyLists(c.list));
+      console.log('Last known status:', LAST_KNOWN_STATUS);
+      console.log('Display text:', (document.getElementById('bg-poa-status-variant')||{textContent:''}).textContent);
+    } catch(e){ console.warn(e); }
+  };
+
+})();
