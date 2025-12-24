@@ -42,6 +42,13 @@ if ($chunkSize > 500) $chunkSize = 500;
 $resetCursor = bg_arg($argv, 'reset-cursor', '0');
 $resetCursor = ($resetCursor === '1' || strtolower((string)$resetCursor) === 'true');
 
+// Verbose output for debugging cron runs
+$verbose = bg_arg($argv, 'verbose', '0');
+$verbose = ($verbose === '1' || strtolower((string)$verbose) === 'true');
+
+// In CLI, make sure we can run longer imports
+@set_time_limit(0);
+
 // If your admin folder is renamed, pass --admin-dir=your_admin_folder
 $adminDir = (string)bg_arg($argv, 'admin-dir', 'admin');
 $adminDir = trim($adminDir, "/ \t\n\r\0\x0B");
@@ -306,23 +313,44 @@ try {
     // Persist fetched products into bg_fetched_products
     $persisted = (int)$bgModel->saveFetchedProducts($collected);
 
-    // Import immediately (matching the current button behavior)
+    // Import via queue (preferred):
+    // - ensures status/attempts are updated atomically
+    // - allows cron to continue processing even if fetch returns 0 but queue already has pending work
+    $claimed = 0;
     $imported = 0;
     $import_errors = 0;
-    foreach ($collected as $p) {
-        $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
+
+    $rowsToProcess = [];
+    if (method_exists($bgModel, 'fetchPendingForProcessing')) {
+        $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
+    } else {
+        // Fallback: process only the collected list (older installs)
+        foreach ($collected as $p) {
+            $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
+            if ($pid === '') continue;
+            $rowsToProcess[] = ['bg_product_id' => $pid];
+        }
+    }
+
+    $claimed = is_array($rowsToProcess) ? count($rowsToProcess) : 0;
+
+    foreach ($rowsToProcess as $row) {
+        $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
         if ($pid === '') continue;
         try {
-            $bgModel->importProductById($pid);
-            if (method_exists($bgModel, 'markFetchedProductImported')) {
-                $bgModel->markFetchedProductImported($pid);
-            }
+            $res = $bgModel->importProductById($pid);
+            if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
             $imported++;
-        } catch (Throwable $e) {
-            if (method_exists($bgModel, 'markFetchedProductError')) {
-                $bgModel->markFetchedProductError($pid, $e->getMessage());
+            if ($verbose) {
+                $r = is_array($res) && isset($res['result']) ? (string)$res['result'] : 'ok';
+                fwrite(STDOUT, "Imported bg_product_id={$pid} result={$r}\n");
             }
+        } catch (Throwable $e) {
+            if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
             $import_errors++;
+            if ($verbose) {
+                fwrite(STDERR, "ERROR bg_product_id={$pid} " . $e->getMessage() . "\n");
+            }
         }
     }
 
@@ -339,6 +367,7 @@ try {
 
     echo "Fetched=" . count($collected) .
          " Persisted=" . $persisted .
+         " Claimed=" . $claimed .
          " Imported=" . $imported .
          " Errors=" . $import_errors .
          " Finished=" . ($finished ? "1" : "0") . "\n";
