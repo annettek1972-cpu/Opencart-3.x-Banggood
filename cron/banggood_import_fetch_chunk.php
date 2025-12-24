@@ -71,6 +71,34 @@ if (!is_file($adminConfig)) {
 
 require_once $adminConfig;
 
+// Ensure OpenCart VERSION constant exists (many OCMODs/models use it).
+// In web requests, this is defined in index.php/admin/index.php; in cron/CLI it isn't.
+if (!defined('VERSION')) {
+    $version = null;
+    $candidates = [
+        $root . '/index.php',
+        $root . '/' . $adminDir . '/index.php',
+    ];
+    foreach ($candidates as $vf) {
+        if (!is_file($vf)) continue;
+        $src = @file_get_contents($vf);
+        if (!is_string($src) || $src === '') continue;
+        if (preg_match("/define\\(\\s*'VERSION'\\s*,\\s*'([^']+)'\\s*\\)\\s*;/", $src, $m)) {
+            $version = $m[1];
+            break;
+        }
+        if (preg_match('/define\\(\\s*"VERSION"\\s*,\\s*"([^"]+)"\\s*\\)\\s*;/', $src, $m)) {
+            $version = $m[1];
+            break;
+        }
+    }
+    if (!is_string($version) || $version === '') {
+        // Safe fallback to avoid undefined constant notices.
+        $version = '3.0.0.0';
+    }
+    define('VERSION', $version);
+}
+
 if (!defined('DIR_SYSTEM')) {
     fwrite(STDERR, "DIR_SYSTEM not defined after loading admin/config.php\n");
     exit(1);
@@ -319,6 +347,7 @@ try {
     $claimed = 0;
     $imported = 0;
     $import_errors = 0;
+    $firstError = '';
 
     $rowsToProcess = [];
     if (method_exists($bgModel, 'fetchPendingForProcessing')) {
@@ -348,6 +377,7 @@ try {
         } catch (Throwable $e) {
             if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
             $import_errors++;
+            if ($firstError === '') $firstError = $e->getMessage();
             if ($verbose) {
                 fwrite(STDERR, "ERROR bg_product_id={$pid} " . $e->getMessage() . "\n");
             }
@@ -371,6 +401,9 @@ try {
          " Imported=" . $imported .
          " Errors=" . $import_errors .
          " Finished=" . ($finished ? "1" : "0") . "\n";
+    if ($import_errors > 0 && $firstError !== '') {
+        echo "FirstError=" . $firstError . "\n";
+    }
     echo "NextCursor=" . $cursorNew . "\n";
 
     // exit code: non-zero if we imported nothing due to errors/fetch issue is not necessarily failure
