@@ -139,7 +139,14 @@ try {
     // ignore
 }
 try {
-    $registry->set('log', new Log((string)$config->get('error_filename')));
+    // OpenCart Log expects a filename (it prepends DIR_LOGS internally).
+    // If error_filename is empty/misconfigured, Log would try to fopen() a directory and warn.
+    $logFile = (string)$config->get('error_filename');
+    $logFile = trim($logFile);
+    if ($logFile === '' || substr($logFile, -1) === '/' || substr($logFile, -1) === '\\') {
+        $logFile = 'banggood_cron.log';
+    }
+    $registry->set('log', new Log($logFile));
 } catch (Throwable $e) {
     // ignore
 }
