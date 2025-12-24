@@ -2539,8 +2539,8 @@ protected function apiRequestRawSimple($url) {
     // This returns safe HTML with simple <p> paragraphs.
     $clean_desc_text = $this->stripAllFormatting($clean_desc_text);
 
-    // Download and rewrite Banggood-hosted <img> tags to local server paths (no banggood references).
-    $clean_desc_text = $this->localizeDescriptionImages($clean_desc_text, $normalized['bg_id']);
+    // Ensure <img> tags use full URLs and are centered (prevents broken relative/lazy sources in product page).
+    $clean_desc_text = $this->normalizeAndCenterDescriptionImages($clean_desc_text);
 
     // build product_description using cleaned description (no tables)
     $product_description = array();
@@ -3035,6 +3035,89 @@ protected function apiRequestRawSimple($url) {
 
             $seen[$norm] = $rel;
             $img->setAttribute('src', 'image/' . ltrim($rel, '/'));
+        }
+
+        // Return inner HTML
+        $out = '';
+        foreach ($root->childNodes as $child) {
+            $piece = $dom->saveHTML($child);
+            if ($piece) $out .= $piece;
+        }
+        return $out !== '' ? $out : $html;
+    }
+
+    /**
+     * Make description images render reliably on the product page.
+     * - Ensures every <img> has a usable absolute src (copies from lazy attributes if needed)
+     * - Converts protocol-relative URLs (//...) to https://...
+     * - Forces images to be responsive and centered
+     */
+    protected function normalizeAndCenterDescriptionImages($html) {
+        if (empty($html) || !is_string($html)) return $html;
+
+        libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?><div id="bg_desc_img_root">' . $html . '</div>');
+        libxml_clear_errors();
+        if (!$loaded) return $html;
+
+        $root = $dom->getElementById('bg_desc_img_root');
+        if (!$root) return $html;
+
+        // DOMNodeList is live; copy nodes first
+        $nodes = array();
+        foreach ($root->getElementsByTagName('img') as $n) $nodes[] = $n;
+
+        $lazy_attrs = array(
+            'data-src',
+            'data-original',
+            'data-lazy-src',
+            'data-actualsrc',
+            'data-url',
+            'data-img',
+            'data-echo',
+            'data-image',
+            'data-zoom-image'
+        );
+
+        foreach ($nodes as $img) {
+            if (!$img instanceof DOMElement) continue;
+
+            $src = trim((string)$img->getAttribute('src'));
+            if ($src === '' || stripos($src, 'data:') === 0) {
+                foreach ($lazy_attrs as $a) {
+                    $cand = trim((string)$img->getAttribute($a));
+                    if ($cand !== '' && stripos($cand, 'data:') !== 0) { $src = $cand; break; }
+                }
+            }
+
+            if ($src !== '') {
+                // protocol-relative
+                if (strpos($src, '//') === 0) $src = 'https:' . $src;
+                // prefer https
+                if (stripos($src, 'http://') === 0) $src = 'https://' . substr($src, 7);
+                // missing scheme but contains a domain
+                if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) {
+                    if (preg_match('#^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/|$)#', $src)) {
+                        $src = 'https://' . $src;
+                    }
+                }
+                $img->setAttribute('src', $src);
+            }
+
+            // Center and make responsive
+            $existing_style = trim((string)$img->getAttribute('style'));
+            $needed_style = 'display:block; margin-left:auto; margin-right:auto; max-width:100%; height:auto;';
+            $style = $existing_style;
+            if ($style !== '' && substr(rtrim($style), -1) !== ';') $style .= ';';
+            $style .= ($style !== '' ? ' ' : '') . $needed_style;
+            $img->setAttribute('style', trim($style));
+
+            // Common bootstrap helper; harmless if theme ignores it
+            $existing_class = trim((string)$img->getAttribute('class'));
+            if (stripos(' ' . $existing_class . ' ', ' img-responsive ') === false && stripos(' ' . $existing_class . ' ', ' img-fluid ') === false) {
+                $img->setAttribute('class', trim($existing_class . ' img-responsive'));
+            }
         }
 
         // Return inner HTML
