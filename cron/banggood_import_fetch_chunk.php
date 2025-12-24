@@ -49,6 +49,13 @@ $verbose = ($verbose === '1' || strtolower((string)$verbose) === 'true');
 // In CLI, make sure we can run longer imports
 @set_time_limit(0);
 
+// How to import each product:
+// - id: call model->importProductById($bg_product_id) (more complete: includes applyStocksToProduct)
+// - url: call model->importProductUrl($url) (matches the "Import Product URL" path)
+// - auto: if queue raw_json contains a URL use it, else fall back to a synthetic URL containing the id
+$importMode = strtolower((string)bg_arg($argv, 'import-mode', 'id'));
+if (!in_array($importMode, ['id', 'url', 'auto'], true)) $importMode = 'id';
+
 // If your admin folder is renamed, pass --admin-dir=your_admin_folder
 $adminDir = (string)bg_arg($argv, 'admin-dir', 'admin');
 $adminDir = trim($adminDir, "/ \t\n\r\0\x0B");
@@ -389,15 +396,51 @@ try {
         $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
         if ($pid === '') continue;
         try {
-            $res = $bgModel->importProductById($pid);
+            $res = null;
+            $usedMode = $importMode;
+
+            // Try to locate a URL in the persisted row (raw_json) when using auto/url.
+            $url = '';
+            if (($importMode === 'auto' || $importMode === 'url') && !empty($row['raw_json'])) {
+                $raw = @json_decode((string)$row['raw_json'], true);
+                if (is_array($raw)) {
+                    foreach (['product_url', 'url', 'href', 'link'] as $k) {
+                        if (!empty($raw[$k]) && is_string($raw[$k])) { $url = $raw[$k]; break; }
+                    }
+                }
+            }
+
+            if ($importMode === 'id') {
+                $res = $bgModel->importProductById($pid);
+            } else {
+                // If we don't have a real URL in the queue, use a synthetic Banggood URL that still matches
+                // extractProductIdFromUrl() regexes. This guarantees the URL-import pipeline is used.
+                if ($url === '') $url = 'https://www.banggood.com/item/' . rawurlencode($pid) . '.html';
+                if ($importMode === 'auto') $usedMode = ($url !== '' ? 'url' : 'id');
+                $res = $bgModel->importProductUrl($url);
+            }
+
             if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
             $imported++;
-            $r = (is_array($res) && isset($res['result'])) ? (string)$res['result'] : '';
+
+            // Normalize result reporting across importProductById() and importProductUrl()
+            $r = '';
+            if (is_array($res) && isset($res['result'])) {
+                $r = (string)$res['result']; // created|updated|skip
+            } elseif (is_array($res) && (isset($res['created']) || isset($res['updated']))) {
+                $c = !empty($res['created']);
+                $u = !empty($res['updated']);
+                if ($c) $r = 'created';
+                elseif ($u) $r = 'updated';
+                else $r = 'skip';
+            }
+
             if ($r === 'created') $created++;
             elseif ($r === 'updated') $updated++;
             elseif ($r === 'skip') $skipped++;
+
             if ($verbose) {
-                fwrite(STDOUT, "Imported bg_product_id={$pid} result=" . ($r !== '' ? $r : 'ok') . "\n");
+                fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$usedMode} result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
             if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
