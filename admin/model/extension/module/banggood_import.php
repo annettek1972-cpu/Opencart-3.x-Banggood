@@ -440,6 +440,32 @@ class ModelExtensionModuleBanggoodImport extends Model {
         $raw = preg_replace("/\n{3,}/u", "\n\n", $raw);
         $lines = preg_split("/\n{2,}/u", $raw);
 
+        // Remove common "broken inline-style" fragments that leak as literal text
+        // e.g. 'margin-bottom: ="" margin-top: ="" style="color: rgb(...)" >'
+        $cleanTextFragment = function($t) {
+            $t = (string)$t;
+            $t = html_entity_decode($t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $t = str_replace("\xc2\xa0", ' ', $t); // nbsp
+
+            // Remove literal style="..."/class="..."/id="..." blobs
+            $t = preg_replace('/\b(style|class|id)\s*=\s*"[^"]*"/iu', ' ', $t);
+
+            // Remove common CSS declarations that appear as stray text
+            $t = preg_replace('/\b(font-size|margin-bottom|margin-top|font-family|color|line-height|min-height|text-align|border-collapse|border|width|clear)\s*:\s*[^;>]{0,200};?/iu', ' ', $t);
+
+            // Remove orphan attribute-like tokens: foo="" or lucida=""
+            $t = preg_replace('/\b[A-Za-z0-9_-]+\s*=\s*""/u', ' ', $t);
+
+            // If the line still contains a dangling ">" from leaked attributes, strip it
+            $t = preg_replace('/^\s*>+\s*/u', '', $t);
+            $t = preg_replace('/\s*>+\s*/u', ' ', $t);
+
+            // Cleanup quotes and excessive punctuation left behind
+            $t = str_replace(array('""', "''"), ' ', $t);
+            $t = preg_replace('/\s{2,}/u', ' ', $t);
+            return trim($t);
+        };
+
         $outParts = array();
         foreach ($lines as $line) {
             $line = trim(preg_replace('/\s{2,}/u', ' ', $line));
@@ -448,7 +474,7 @@ class ModelExtensionModuleBanggoodImport extends Model {
             // If the line contains one or more markers, split and interleave.
             $tokens = preg_split('/(\[\[BGIMG\d+\]\])/', $line, -1, PREG_SPLIT_DELIM_CAPTURE);
             foreach ($tokens as $t) {
-                $t = trim($t);
+                $t = $cleanTextFragment(trim($t));
                 if ($t === '') continue;
                 if (isset($imgMap[$t])) {
                     if ($imgMap[$t] !== '') $outParts[] = '<p>' . $imgMap[$t] . '</p>';
