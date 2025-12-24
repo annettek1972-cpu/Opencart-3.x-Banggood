@@ -176,6 +176,87 @@
   var requestSeq = 0;
   var lastText = null;
   var lastNonEmptyStatusText = '';
+  var autoPickDone = false;
+
+  function parseIdsFromKey(key) {
+    key = String(key || '').trim();
+    if (!key) return [];
+    return key
+      .split(/[,\|\s;]+/)
+      .map(function (x) { return String(x).trim(); })
+      .filter(function (x) { return x !== ''; })
+      .map(function (x) { return parseInt(x, 10); })
+      .filter(function (n) { return !isNaN(n) && n > 0; });
+  }
+
+  function applyPovSelection(povIds) {
+    if (!Array.isArray(povIds) || !povIds.length) return;
+    // Selects
+    $('select[name^="option["]').each(function () {
+      var $sel = $(this);
+      var matched = null;
+      $sel.find('option').each(function () {
+        var v = parseInt($(this).val(), 10);
+        if (v && povIds.indexOf(v) !== -1) matched = String(v);
+      });
+      if (matched) $sel.val(matched);
+      else {
+        // fallback: choose first non-empty option
+        var firstNonEmpty = $sel.find('option').filter(function () { return $(this).val(); }).first().val();
+        if (firstNonEmpty) $sel.val(firstNonEmpty);
+      }
+    });
+
+    // Radios
+    var radioNames = {};
+    $('input[type="radio"][name^="option["]').each(function () {
+      radioNames[$(this).attr('name')] = true;
+    });
+    Object.keys(radioNames).forEach(function (name) {
+      var picked = null;
+      $('input[type="radio"][name="' + name.replace(/"/g, '\\"') + '"]').each(function () {
+        var v = parseInt($(this).val(), 10);
+        if (v && povIds.indexOf(v) !== -1) picked = this;
+      });
+      if (picked) $(picked).prop('checked', true);
+      else {
+        // fallback: choose first radio in group
+        var $first = $('input[type="radio"][name="' + name.replace(/"/g, '\\"') + '"]').first();
+        if ($first.length) $first.prop('checked', true);
+      }
+    });
+
+    // Trigger downstream updates
+    $('select[name^="option["], input[type="radio"][name^="option["]').trigger('change');
+  }
+
+  function autoPickFirstAvailableVariant() {
+    if (autoPickDone) return;
+    autoPickDone = true;
+
+    // Only auto-pick when nothing is selected yet.
+    var pov = collectPovIds();
+    if (pov && pov.length) return;
+
+    var productId = getProductId();
+    if (!productId) return;
+
+    var url = window.bgVariantStockUrl || 'index.php?route=product/product_variant';
+
+    $.ajax({
+      url: url,
+      type: 'post',
+      dataType: 'json',
+      data: { product_id: productId, auto_select: 1 },
+      success: function (json) {
+        if (!json || !json.found) return;
+        var ids = Array.isArray(json.pov) ? json.pov : parseIdsFromKey(json.option_key);
+        if (!ids || !ids.length) return;
+        applyPovSelection(ids);
+        scheduleUpdate();
+      }
+    });
+  }
 
   function getBgStatusMap() {
     try {
@@ -426,6 +507,7 @@
   );
 
   $(function () {
+    autoPickFirstAvailableVariant();
     scheduleUpdate();
 
     // Capture-phase "unlock on interact" to defeat any scripts that re-disable OOS options.

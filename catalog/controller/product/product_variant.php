@@ -62,7 +62,8 @@ class ControllerProductProductVariant extends Controller {
 			'option_key' => null,
 			'option_text' => null,
 			'stock_status_token' => null,
-			'stock_status_text' => null
+			'stock_status_text' => null,
+			'pov' => array()
 		);
 
 		try {
@@ -89,6 +90,50 @@ class ControllerProductProductVariant extends Controller {
 			}
 
 			$pov_ids = array_values(array_unique(array_map('intval', array_filter(array_map('trim', (array)$pov_ids), function($v){ return $v !== ''; }))));
+
+			// Auto-select: if no option selection is provided, return the first available variant.
+			$auto = false;
+			if (isset($this->request->get['auto_select'])) $auto = (bool)$this->request->get['auto_select'];
+			elseif (isset($this->request->post['auto_select'])) $auto = (bool)$this->request->post['auto_select'];
+
+			if (empty($pov_ids) && $auto) {
+				$tbl = DB_PREFIX . 'product_variant';
+				$q0 = $this->db->query(
+					"SELECT variant_id, option_key, option_text, quantity, price, stock_status_token
+					 FROM `" . $tbl . "`
+					 WHERE product_id = " . (int)$product_id . " AND quantity > 0
+					 ORDER BY variant_id ASC
+					 LIMIT 1"
+				);
+				if (!$q0 || !$q0->num_rows) {
+					$q0 = $this->db->query(
+						"SELECT variant_id, option_key, option_text, quantity, price, stock_status_token
+						 FROM `" . $tbl . "`
+						 WHERE product_id = " . (int)$product_id . "
+						 ORDER BY variant_id ASC
+						 LIMIT 1"
+					);
+				}
+				if ($q0 && $q0->num_rows) {
+					$row = $q0->row;
+					$json['found'] = true;
+					$json['variant_id'] = isset($row['variant_id']) ? (int)$row['variant_id'] : null;
+					$json['quantity'] = isset($row['quantity']) ? (int)$row['quantity'] : null;
+					$json['price'] = isset($row['price']) ? (float)$row['price'] : null;
+					$json['option_key'] = isset($row['option_key']) ? (string)$row['option_key'] : null;
+					$json['option_text'] = isset($row['option_text']) ? (string)$row['option_text'] : null;
+					$json['stock_status_token'] = isset($row['stock_status_token']) ? (string)$row['stock_status_token'] : null;
+					$json['stock_status_text'] = $this->stockTokenToText($json['stock_status_token']);
+					// Provide parsed pov ids for frontend auto-selection.
+					$key = isset($row['option_key']) ? (string)$row['option_key'] : '';
+					$ids = preg_split('/[,\|\s;]+/', trim($key));
+					$ids = array_values(array_unique(array_map('intval', array_filter(array_map('trim', (array)$ids), function($v){ return $v !== ''; }))));
+					$json['pov'] = $ids;
+				}
+				$this->response->setOutput(json_encode($json));
+				return;
+			}
+
 			if (empty($pov_ids)) {
 				$this->response->setOutput(json_encode(array('error' => 'option_key or pov[] is required')));
 				return;
@@ -162,6 +207,7 @@ class ControllerProductProductVariant extends Controller {
 				$json['option_text'] = isset($row['option_text']) ? (string)$row['option_text'] : null;
 				$json['stock_status_token'] = isset($row['stock_status_token']) ? (string)$row['stock_status_token'] : null;
 				$json['stock_status_text'] = $this->stockTokenToText($json['stock_status_token']);
+				$json['pov'] = $pov_ids;
 			}
 
 			$this->response->setOutput(json_encode($json));
