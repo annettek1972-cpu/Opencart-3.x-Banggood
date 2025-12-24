@@ -282,15 +282,16 @@ data-ov="{{ option_value.option_value_id }}"
 
 											<span class="option-content-box {{ option.name }} blinking" data-title="{{ option_value.name}} {{ radio_price }}" title ="Select {{ option.name }} {{ option_value.name}}">
 												
-										{% if option.name|lower == 'color' and option_value.image %}
-  <img
-    src="{{ option_value.image|e }}"
-    alt="{{ option_value.name|e }}" title ="Select {{ option.name }} {{ option_value.name}}"
-    
-  />
-{% else %}
-  <span class="sizes-top sizes width">{{ option_value.name|e }}</span>
-{% endif %}
+										{# If an option value has an image, always display it (not just for "color"). #}
+										{% if option_value.image %}
+											<img
+												src="{{ option_value.image|e }}"
+												alt="{{ option_value.name|e }}"
+												title="Select {{ option.name }} {{ option_value.name }}"
+											/>
+										{% else %}
+											<span class="sizes-top sizes width">{{ option_value.name|e }}</span>
+										{% endif %}
 													<span class="option-name">
 													
 													<span class="size-number-caps" >
