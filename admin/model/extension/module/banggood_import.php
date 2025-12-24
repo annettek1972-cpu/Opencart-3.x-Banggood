@@ -1885,6 +1885,7 @@ protected function apiRequestRawSimple($url) {
                 foreach ($poa_list as $group) {
                     if (!is_array($group)) continue;
                     $option_name = isset($group['option_name']) ? (string)$group['option_name'] : (isset($group['name']) ? (string)$group['name'] : '');
+                    $option_name = $this->normalizeImportedOptionName($option_name);
                     if ($option_name === '') continue;
                     $option_id = $this->getOptionIdByName($option_name);
                     if (!$option_id) continue;
@@ -3161,6 +3162,7 @@ protected function apiRequestRawSimple($url) {
 
         foreach ($poa_list as $group) {
             $option_name = isset($group['option_name']) ? $group['option_name'] : (isset($group['poa_name']) ? $group['poa_name'] : (isset($group['name']) ? $group['name'] : ''));
+            $option_name = $this->normalizeImportedOptionName($option_name);
             if (!$option_name) continue;
 
             $option_type = 'radio';
@@ -3562,6 +3564,36 @@ protected function apiRequestRawSimple($url) {
         $query = $this->db->query($sql);
         if ($query->num_rows) return (int)$query->row['option_id'];
         return 0;
+    }
+
+    /**
+     * Normalize option group names coming from Banggood so imports consistently reuse
+     * the same OpenCart option names (e.g. "Color" not "Color 1", "Size" not "Size 1").
+     *
+     * Keep this narrowly scoped to the commonly duplicated groups.
+     */
+    protected function normalizeImportedOptionName($name) {
+        if ($name === null) return '';
+        $name = html_entity_decode((string)$name, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $name = preg_replace('/\s+/u', ' ', trim($name));
+
+        // Only normalize the known duplicated groups ("Color"/"Size") to avoid changing unrelated option names.
+        if (!preg_match('/^(color|colour|size)\b/i', $name)) return $name;
+
+        // Remove a trailing colon (some feeds use "Color:" / "Size:")
+        $name = preg_replace('/\s*:\s*$/u', '', $name);
+
+        // Normalize compact forms like "Color1" / "Size2" -> "Color 1" / "Size 2"
+        if (preg_match('/^(color|colour|size)(\d+)$/i', $name, $m)) {
+            $name = $m[1] . ' ' . $m[2];
+        }
+
+        // Canonicalize: "Color", "Color 1", "colour", etc -> "Color"
+        if (preg_match('/^(color|colour)(?:\s+\d+)?$/i', $name)) return 'Color';
+        // Canonicalize: "Size", "Size 1", etc -> "Size"
+        if (preg_match('/^size(?:\s+\d+)?$/i', $name)) return 'Size';
+
+        return $name;
     }
 
     protected function addOption($name, $type = 'radio') {
@@ -5039,6 +5071,7 @@ protected function apiRequestRawSimple($url) {
             foreach ($poa_list as $group) {
                 if (!is_array($group)) continue;
                 $option_name = isset($group['option_name']) ? (string)$group['option_name'] : (isset($group['name']) ? (string)$group['name'] : '');
+                $option_name = $this->normalizeImportedOptionName($option_name);
                 if ($option_name === '') continue;
                 $option_id = $this->getOptionIdByName($option_name);
                 if (!$option_id) continue;
