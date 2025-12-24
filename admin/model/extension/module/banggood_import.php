@@ -3161,12 +3161,13 @@ protected function apiRequestRawSimple($url) {
 
         foreach ($poa_list as $group) {
             $option_name = isset($group['option_name']) ? $group['option_name'] : (isset($group['poa_name']) ? $group['poa_name'] : (isset($group['name']) ? $group['name'] : ''));
-            if (!$option_name) continue;
+            $option_name = $this->normalizeOptionLabel($option_name);
+            if ($option_name === '') continue;
 
             $option_type = 'radio';
             $option_id = $this->getOptionIdByName($option_name);
             if (!$option_id) $option_id = $this->addOption($option_name, $option_type);
-            else $this->db->query("UPDATE `" . DB_PREFIX . "option` SET `type` = 'radio' WHERE option_id = '" . (int)$option_id . "'");
+            // NOTE: if an option already exists, we reuse it as-is (do not force type changes).
 
             $is_size_option = (stripos($option_name, 'size') !== false) || (stripos($option_name, 'size') === 0);
 
@@ -3179,6 +3180,7 @@ protected function apiRequestRawSimple($url) {
             if (!empty($group['option_values']) && is_array($group['option_values'])) {
                 foreach ($group['option_values'] as $val) {
                     $value_name = isset($val['poa_name']) ? $val['poa_name'] : (isset($val['name']) ? $val['name'] : (isset($val['poa_value']) ? $val['poa_value'] : ''));
+                    $value_name = $this->normalizeOptionLabel($value_name);
                     if ($value_name === '') continue;
 
                     // compute sort order for sizes
@@ -3556,11 +3558,49 @@ protected function apiRequestRawSimple($url) {
         return true;
     }
 
+    /**
+     * Normalize option/option-value labels so we can reliably reuse existing ones.
+     * - trims
+     * - collapses whitespace
+     * - strips trailing ":" (common in some feeds)
+     */
+    protected function normalizeOptionLabel($s) {
+        if ($s === null) return '';
+        if (!is_string($s)) $s = (string)$s;
+        $s = html_entity_decode($s, ENT_QUOTES, 'UTF-8');
+        $s = trim($s);
+        $s = preg_replace('/\s+/u', ' ', $s);
+        $s = preg_replace('/\s*:\s*$/u', '', $s);
+        return trim($s);
+    }
+
     protected function getOptionIdByName($name) {
-        $name_esc = $this->db->escape($name);
-        $sql = "SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $name_esc . "' LIMIT 1";
-        $query = $this->db->query($sql);
-        if ($query->num_rows) return (int)$query->row['option_id'];
+        $name_norm = $this->normalizeOptionLabel($name);
+        if ($name_norm === '') return 0;
+
+        // Fast-path: exact match
+        $name_esc = $this->db->escape($name_norm);
+        $q1 = $this->db->query(
+            "SELECT o.option_id
+             FROM `" . DB_PREFIX . "option_description` od
+             JOIN `" . DB_PREFIX . "option` o ON o.option_id = od.option_id
+             WHERE od.`name` = '" . $name_esc . "'
+             ORDER BY o.option_id ASC
+             LIMIT 1"
+        );
+        if ($q1->num_rows) return (int)$q1->row['option_id'];
+
+        // Robust match: ignore case, surrounding whitespace and trailing ":"
+        $q2 = $this->db->query(
+            "SELECT o.option_id
+             FROM `" . DB_PREFIX . "option_description` od
+             JOIN `" . DB_PREFIX . "option` o ON o.option_id = od.option_id
+             WHERE LOWER(TRIM(TRAILING ':' FROM TRIM(od.`name`))) = LOWER('" . $name_esc . "')
+             ORDER BY o.option_id ASC
+             LIMIT 1"
+        );
+        if ($q2->num_rows) return (int)$q2->row['option_id'];
+
         return 0;
     }
 
@@ -3576,10 +3616,34 @@ protected function apiRequestRawSimple($url) {
     }
 
     protected function getOptionValueIdByName($option_id, $value_name) {
-        $value_name_esc = $this->db->escape($value_name);
-        $sql = "SELECT ov.option_value_id FROM `" . DB_PREFIX . "option_value` ov LEFT JOIN `" . DB_PREFIX . "option_value_description` ovd ON (ov.option_value_id = ovd.option_value_id) WHERE ov.option_id = '" . (int)$option_id . "' AND ovd.name = '" . $value_name_esc . "' LIMIT 1";
-        $query = $this->db->query($sql);
-        if ($query->num_rows) return (int)$query->row['option_value_id'];
+        $value_norm = $this->normalizeOptionLabel($value_name);
+        if ($value_norm === '') return 0;
+        $value_name_esc = $this->db->escape($value_norm);
+
+        // Fast-path: exact match
+        $q1 = $this->db->query(
+            "SELECT ov.option_value_id
+             FROM `" . DB_PREFIX . "option_value` ov
+             JOIN `" . DB_PREFIX . "option_value_description` ovd ON ov.option_value_id = ovd.option_value_id
+             WHERE ov.option_id = '" . (int)$option_id . "'
+               AND ovd.`name` = '" . $value_name_esc . "'
+             ORDER BY ov.option_value_id ASC
+             LIMIT 1"
+        );
+        if ($q1->num_rows) return (int)$q1->row['option_value_id'];
+
+        // Robust match: ignore case, surrounding whitespace and trailing ":"
+        $q2 = $this->db->query(
+            "SELECT ov.option_value_id
+             FROM `" . DB_PREFIX . "option_value` ov
+             JOIN `" . DB_PREFIX . "option_value_description` ovd ON ov.option_value_id = ovd.option_value_id
+             WHERE ov.option_id = '" . (int)$option_id . "'
+               AND LOWER(TRIM(TRAILING ':' FROM TRIM(ovd.`name`))) = LOWER('" . $value_name_esc . "')
+             ORDER BY ov.option_value_id ASC
+             LIMIT 1"
+        );
+        if ($q2->num_rows) return (int)$q2->row['option_value_id'];
+
         return 0;
     }
 
