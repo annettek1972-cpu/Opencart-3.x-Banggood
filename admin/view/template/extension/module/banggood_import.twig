@@ -573,8 +573,11 @@ function initBanggoodCategoryTree() {
       var badge = $(this).find('.bg-id');
       if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
     }
+    // IMPORTANT: do NOT auto-import or auto-load products on category click.
+    // Only set the category id field so the admin can manually click "Import Category".
     if (cid) {
-      loadProducts(cid, 1);
+      $('#input-category-id').val(cid);
+      $('#banggood-products').html('<div class="text-muted">Selected category #' + String(cid) + '. Click "Import Category" to import, or use Fetch to browse.</div>');
     }
   });
 
