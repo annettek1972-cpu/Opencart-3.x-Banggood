@@ -348,6 +348,9 @@ try {
     $imported = 0;
     $import_errors = 0;
     $firstError = '';
+    $created = 0;
+    $updated = 0;
+    $skipped = 0;
 
     $rowsToProcess = [];
     if (method_exists($bgModel, 'fetchPendingForProcessing')) {
@@ -370,9 +373,12 @@ try {
             $res = $bgModel->importProductById($pid);
             if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
             $imported++;
+            $r = (is_array($res) && isset($res['result'])) ? (string)$res['result'] : '';
+            if ($r === 'created') $created++;
+            elseif ($r === 'updated') $updated++;
+            elseif ($r === 'skip') $skipped++;
             if ($verbose) {
-                $r = is_array($res) && isset($res['result']) ? (string)$res['result'] : 'ok';
-                fwrite(STDOUT, "Imported bg_product_id={$pid} result={$r}\n");
+                fwrite(STDOUT, "Imported bg_product_id={$pid} result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
             if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
@@ -399,6 +405,7 @@ try {
          " Persisted=" . $persisted .
          " Claimed=" . $claimed .
          " Imported=" . $imported .
+         " (created=" . $created . " updated=" . $updated . " skipped=" . $skipped . ")" .
          " Errors=" . $import_errors .
          " Finished=" . ($finished ? "1" : "0") . "\n";
     if ($import_errors > 0 && $firstError !== '') {
