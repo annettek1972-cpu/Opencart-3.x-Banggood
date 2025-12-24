@@ -311,6 +311,17 @@ class ModelExtensionModuleBanggoodImport extends Model {
     $textNodes = $xpath->query('//*[@id="bg_strip_root"]//text()');
     foreach ($textNodes as $tn) {
         $txt = $tn->nodeValue;
+        // Remove common "broken attribute/CSS" fragments that sometimes end up as literal text
+        // (e.g. 'margin-bottom: =""', 'style="color: rgb(...); font-family: ">', 'lucida=""').
+        // We intentionally keep real content like "More details:" and numbered lists.
+        $txt = preg_replace('/\bstyle\s*=\s*"[^"]*"\s*/iu', '', $txt);
+        $txt = preg_replace('/\b[a-z][a-z0-9_-]*\s*:\s*=?\s*""\s*/iu', '', $txt);
+        $txt = preg_replace('/\b[a-z][a-z0-9_-]*\s*=\s*""\s*/iu', '', $txt);
+        // Remove any leftover rgb() / font-family / font-size tokens if they appear as text
+        $txt = preg_replace('/\bcolor\s*:\s*rgb\([^)]*\)\s*;?\s*/iu', '', $txt);
+        $txt = preg_replace('/\bfont-family\s*:\s*[^;>"]*\s*;?\s*/iu', '', $txt);
+        $txt = preg_replace('/\bfont-size\s*:\s*[^;>"]*\s*;?\s*/iu', '', $txt);
+
         // Avoid modifying scripts/URLs by only applying to short label-like patterns:
         // Replace "Label:Value" or "Label:ValueMore" -> "Label: Value"
         $txt = preg_replace('/([A-Za-z0-9\)\]\%])\:([A-Za-z0-9\%\(\[])/u', '$1: $2', $txt);
