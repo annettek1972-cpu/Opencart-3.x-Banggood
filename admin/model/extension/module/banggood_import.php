@@ -2674,6 +2674,12 @@ protected function apiRequestRawSimple($url) {
     // Strip HTML aggressively (fixes broken inline-style fragments) and keep images.
     $clean_desc_text = $this->sanitizeDescriptionForProduct($clean_desc_text);
 
+    // Download and rewrite Banggood-hosted <img> tags to local server paths (no banggood references).
+    $clean_desc_text = $this->localizeDescriptionImages($clean_desc_text, $normalized['bg_id']);
+
+    // Ensure <img> tags are centered and use full URLs when needed.
+    $clean_desc_text = $this->normalizeAndCenterDescriptionImages($clean_desc_text);
+
     // Meta fields MUST be text-only (no HTML)
     $meta_title_text = $this->sanitizeMetaText($normalized['name'], 255);
     $meta_desc_text = $this->sanitizeMetaText($desc_source, 255);
@@ -2881,6 +2887,8 @@ protected function apiRequestRawSimple($url) {
     if (!empty($clean_desc_for_save)) {
         $clean_desc_for_save = $this->boldLabelValueSegments($clean_desc_for_save);
         $clean_desc_for_save = $this->sanitizeDescriptionForProduct($clean_desc_for_save);
+        $clean_desc_for_save = $this->localizeDescriptionImages($clean_desc_for_save, isset($normalized['bg_id']) ? $normalized['bg_id'] : '');
+        $clean_desc_for_save = $this->normalizeAndCenterDescriptionImages($clean_desc_for_save);
         $meta_title_text = $this->sanitizeMetaText(isset($normalized['name']) ? $normalized['name'] : '', 255);
         $meta_desc_text = $this->sanitizeMetaText($raw_desc, 255);
         foreach ($languages as $language) {
