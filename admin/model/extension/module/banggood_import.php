@@ -207,114 +207,6 @@ class ModelExtensionModuleBanggoodImport extends Model {
         return '<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>';
     }
 
-    /**
-     * Strip description HTML aggressively (fixes broken inline-style fragments),
-     * while preserving images (kept inline as <img> blocks).
-     *
-     * Output: simple HTML containing only <p> and <img>.
-     */
-    protected function sanitizeDescriptionForProduct($html) {
-        if (empty($html) || !is_string($html)) return '';
-
-        // Normalize entities early
-        $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-
-        libxml_use_internal_errors(true);
-        $dom = new DOMDocument();
-        $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?><div id="bg_desc_sanitize_root">' . $html . '</div>');
-        libxml_clear_errors();
-        if (!$loaded) {
-            $txt = trim(strip_tags($html));
-            $txt = preg_replace('/\s{2,}/u', ' ', $txt);
-            return $txt !== '' ? ('<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>') : '';
-        }
-
-        $root = $dom->getElementById('bg_desc_sanitize_root');
-        if (!$root) {
-            $txt = trim(preg_replace('/\s{2,}/u', ' ', (string)$dom->textContent));
-            return $txt !== '' ? ('<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>') : '';
-        }
-
-        // Replace images with ordered markers, keep their resolved src in a map.
-        $imgMap = array(); // marker => imgHtml
-        $imgNodes = array();
-        foreach ($root->getElementsByTagName('img') as $n) $imgNodes[] = $n;
-
-        $lazy_attrs = array('data-src','data-original','data-lazy-src','data-actualsrc','data-url','data-img','data-echo','data-image','data-zoom-image');
-        $idx = 1;
-        foreach ($imgNodes as $img) {
-            if (!$img instanceof DOMElement) continue;
-
-            $src = trim((string)$img->getAttribute('src'));
-            if ($src === '' || stripos($src, 'data:') === 0) {
-                foreach ($lazy_attrs as $a) {
-                    $cand = trim((string)$img->getAttribute($a));
-                    if ($cand !== '' && stripos($cand, 'data:') !== 0) { $src = $cand; break; }
-                }
-            }
-
-            if ($src !== '') {
-                if (strpos($src, '//') === 0) $src = 'https:' . $src;
-                if (stripos($src, 'http://') === 0) $src = 'https://' . substr($src, 7);
-                if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) {
-                    if (preg_match('#^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/|$)#', $src)) $src = 'https://' . $src;
-                }
-            }
-
-            $marker = '[[BGIMG' . $idx . ']]';
-            $idx++;
-
-            if ($src !== '' && (stripos($src, 'http://') === 0 || stripos($src, 'https://') === 0)) {
-                $imgHtml = '<img src="' . htmlspecialchars($src, ENT_QUOTES, 'UTF-8') . '" style="display:block; margin-left:auto; margin-right:auto; max-width:100%; height:auto;" />';
-                $imgMap[$marker] = $imgHtml;
-            } else {
-                $imgMap[$marker] = ''; // drop invalid/broken src
-            }
-
-            // Replace the <img> element with a text marker to preserve order.
-            $img->parentNode->replaceChild($dom->createTextNode("\n" . $marker . "\n"), $img);
-        }
-
-        // Add newlines after common block-ish tags to preserve readable paragraphs in textContent.
-        $xpath = new DOMXPath($dom);
-        $blockNodes = array();
-        foreach ($xpath->query('//*[@id="bg_desc_sanitize_root"]//*[self::p or self::div or self::br or self::li or self::tr or self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]') as $n) {
-            $blockNodes[] = $n;
-        }
-        foreach ($blockNodes as $n) {
-            try {
-                if ($n && $n->parentNode) $n->parentNode->insertBefore($dom->createTextNode("\n"), $n->nextSibling);
-            } catch (\Throwable $e) {}
-        }
-
-        $raw = (string)$root->textContent;
-        // normalize whitespace but keep markers and paragraph breaks
-        $raw = str_replace(array("\r\n", "\r"), "\n", $raw);
-        $raw = preg_replace("/[ \t]+\n/u", "\n", $raw);
-        $raw = preg_replace("/\n{3,}/u", "\n\n", $raw);
-        $lines = preg_split("/\n{2,}/u", $raw);
-
-        $outParts = array();
-        foreach ($lines as $line) {
-            $line = trim(preg_replace('/\s{2,}/u', ' ', $line));
-            if ($line === '') continue;
-
-            // If the line contains one or more markers, split and interleave.
-            $tokens = preg_split('/(\[\[BGIMG\d+\]\])/', $line, -1, PREG_SPLIT_DELIM_CAPTURE);
-            foreach ($tokens as $t) {
-                $t = trim($t);
-                if ($t === '') continue;
-                if (isset($imgMap[$t])) {
-                    if ($imgMap[$t] !== '') $outParts[] = '<p>' . $imgMap[$t] . '</p>';
-                } else {
-                    $outParts[] = '<p>' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '</p>';
-                }
-            }
-        }
-
-        return !empty($outParts) ? implode("\n", $outParts) : '';
-    }
-
     $xpath = new DOMXPath($dom);
 
     // Remove style/script and comments
@@ -447,6 +339,114 @@ class ModelExtensionModuleBanggoodImport extends Model {
 
     return trim($out);
 }
+
+    /**
+     * Strip description HTML aggressively (fixes broken inline-style fragments),
+     * while preserving images (kept inline as <img> blocks).
+     *
+     * Output: simple HTML containing only <p> and <img>.
+     */
+    protected function sanitizeDescriptionForProduct($html) {
+        if (empty($html) || !is_string($html)) return '';
+
+        // Normalize entities early
+        $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?><div id="bg_desc_sanitize_root">' . $html . '</div>');
+        libxml_clear_errors();
+        if (!$loaded) {
+            $txt = trim(strip_tags($html));
+            $txt = preg_replace('/\s{2,}/u', ' ', $txt);
+            return $txt !== '' ? ('<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>') : '';
+        }
+
+        $root = $dom->getElementById('bg_desc_sanitize_root');
+        if (!$root) {
+            $txt = trim(preg_replace('/\s{2,}/u', ' ', (string)$dom->textContent));
+            return $txt !== '' ? ('<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>') : '';
+        }
+
+        // Replace images with ordered markers, keep their resolved src in a map.
+        $imgMap = array(); // marker => imgHtml
+        $imgNodes = array();
+        foreach ($root->getElementsByTagName('img') as $n) $imgNodes[] = $n;
+
+        $lazy_attrs = array('data-src','data-original','data-lazy-src','data-actualsrc','data-url','data-img','data-echo','data-image','data-zoom-image');
+        $idx = 1;
+        foreach ($imgNodes as $img) {
+            if (!$img instanceof DOMElement) continue;
+
+            $src = trim((string)$img->getAttribute('src'));
+            if ($src === '' || stripos($src, 'data:') === 0) {
+                foreach ($lazy_attrs as $a) {
+                    $cand = trim((string)$img->getAttribute($a));
+                    if ($cand !== '' && stripos($cand, 'data:') !== 0) { $src = $cand; break; }
+                }
+            }
+
+            if ($src !== '') {
+                if (strpos($src, '//') === 0) $src = 'https:' . $src;
+                if (stripos($src, 'http://') === 0) $src = 'https://' . substr($src, 7);
+                if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) {
+                    if (preg_match('#^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/|$)#', $src)) $src = 'https://' . $src;
+                }
+            }
+
+            $marker = '[[BGIMG' . $idx . ']]';
+            $idx++;
+
+            if ($src !== '' && (stripos($src, 'http://') === 0 || stripos($src, 'https://') === 0)) {
+                $imgHtml = '<img src="' . htmlspecialchars($src, ENT_QUOTES, 'UTF-8') . '" style="display:block; margin-left:auto; margin-right:auto; max-width:100%; height:auto;" />';
+                $imgMap[$marker] = $imgHtml;
+            } else {
+                $imgMap[$marker] = ''; // drop invalid/broken src
+            }
+
+            // Replace the <img> element with a text marker to preserve order.
+            $img->parentNode->replaceChild($dom->createTextNode("\n" . $marker . "\n"), $img);
+        }
+
+        // Add newlines after common block-ish tags to preserve readable paragraphs in textContent.
+        $xpath = new DOMXPath($dom);
+        $blockNodes = array();
+        foreach ($xpath->query('//*[@id="bg_desc_sanitize_root"]//*[self::p or self::div or self::br or self::li or self::tr or self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]') as $n) {
+            $blockNodes[] = $n;
+        }
+        foreach ($blockNodes as $n) {
+            try {
+                if ($n && $n->parentNode) $n->parentNode->insertBefore($dom->createTextNode("\n"), $n->nextSibling);
+            } catch (\Throwable $e) {}
+        }
+
+        $raw = (string)$root->textContent;
+        // normalize whitespace but keep markers and paragraph breaks
+        $raw = str_replace(array("\r\n", "\r"), "\n", $raw);
+        $raw = preg_replace("/[ \t]+\n/u", "\n", $raw);
+        $raw = preg_replace("/\n{3,}/u", "\n\n", $raw);
+        $lines = preg_split("/\n{2,}/u", $raw);
+
+        $outParts = array();
+        foreach ($lines as $line) {
+            $line = trim(preg_replace('/\s{2,}/u', ' ', $line));
+            if ($line === '') continue;
+
+            // If the line contains one or more markers, split and interleave.
+            $tokens = preg_split('/(\[\[BGIMG\d+\]\])/', $line, -1, PREG_SPLIT_DELIM_CAPTURE);
+            foreach ($tokens as $t) {
+                $t = trim($t);
+                if ($t === '') continue;
+                if (isset($imgMap[$t])) {
+                    if ($imgMap[$t] !== '') $outParts[] = '<p>' . $imgMap[$t] . '</p>';
+                } else {
+                    $outParts[] = '<p>' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '</p>';
+                }
+            }
+        }
+
+        return !empty($outParts) ? implode("\n", $outParts) : '';
+    }
 	
 
     /* -------------------------
