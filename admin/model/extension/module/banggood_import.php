@@ -486,6 +486,32 @@ class ModelExtensionModuleBanggoodImport extends Model {
 
         return !empty($outParts) ? implode("\n", $outParts) : '';
     }
+
+    /**
+     * Sanitize text for meta fields (meta_title/meta_description/meta_keyword/tag).
+     * Ensures TEXT ONLY (no HTML), collapses whitespace, and optionally truncates.
+     */
+    protected function sanitizeMetaText($s, $maxLen = 0) {
+        if ($s === null) return '';
+        if (!is_string($s)) $s = (string)$s;
+        if ($s === '') return '';
+
+        // Drop script/style/noscript blocks if any are present
+        $s = preg_replace('#<\s*(script|style|noscript)[^>]*>.*?</\s*\1\s*>#is', ' ', $s);
+        // Decode entities then strip tags
+        $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $s = strip_tags($s);
+        // Normalize whitespace
+        $s = str_replace("\xc2\xa0", ' ', $s); // nbsp
+        $s = preg_replace('/\s{2,}/u', ' ', $s);
+        $s = trim($s);
+
+        if ($maxLen && $maxLen > 0 && strlen($s) > (int)$maxLen) {
+            $s = substr($s, 0, (int)$maxLen);
+            $s = rtrim($s);
+        }
+        return $s;
+    }
 	
 
     /* -------------------------
@@ -2648,16 +2674,20 @@ protected function apiRequestRawSimple($url) {
     // Strip HTML aggressively (fixes broken inline-style fragments) and keep images.
     $clean_desc_text = $this->sanitizeDescriptionForProduct($clean_desc_text);
 
+    // Meta fields MUST be text-only (no HTML)
+    $meta_title_text = $this->sanitizeMetaText($normalized['name'], 255);
+    $meta_desc_text = $this->sanitizeMetaText($desc_source, 255);
+
     // build product_description using cleaned description (no tables)
     $product_description = array();
     foreach ($languages as $language) {
         $product_description[$language['language_id']] = array(
             'name' => $normalized['name'],
             'description' => $clean_desc_text,
-            'meta_title' => $normalized['name'],
-            'meta_description' => '',
-            'meta_keyword' => '',
-            'tag' => ''
+            'meta_title' => $meta_title_text,
+            'meta_description' => $meta_desc_text,
+            'meta_keyword' => $this->sanitizeMetaText('', 255),
+            'tag' => $this->sanitizeMetaText('', 255)
         );
     }
 
@@ -2847,15 +2877,22 @@ protected function apiRequestRawSimple($url) {
          WHERE product_id = " . (int)$product_id
     );
 
-    // Update product_description on updates too (sanitize heavily and keep images).
+    // Update product_description (including meta fields) on updates too.
     if (!empty($clean_desc_for_save)) {
         $clean_desc_for_save = $this->boldLabelValueSegments($clean_desc_for_save);
         $clean_desc_for_save = $this->sanitizeDescriptionForProduct($clean_desc_for_save);
+        $meta_title_text = $this->sanitizeMetaText(isset($normalized['name']) ? $normalized['name'] : '', 255);
+        $meta_desc_text = $this->sanitizeMetaText($raw_desc, 255);
         foreach ($languages as $language) {
             $language_id = (int)$language['language_id'];
             $this->db->query(
                 "UPDATE `" . DB_PREFIX . "product_description`
-                 SET `description` = '" . $this->db->escape($clean_desc_for_save) . "'
+                 SET `name` = '" . $this->db->escape(isset($normalized['name']) ? (string)$normalized['name'] : '') . "',
+                     `description` = '" . $this->db->escape($clean_desc_for_save) . "',
+                     `meta_title` = '" . $this->db->escape($meta_title_text) . "',
+                     `meta_description` = '" . $this->db->escape($meta_desc_text) . "',
+                     `meta_keyword` = '',
+                     `tag` = ''
                  WHERE product_id = " . (int)$product_id . " AND language_id = " . (int)$language_id
             );
         }
