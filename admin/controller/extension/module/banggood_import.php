@@ -334,10 +334,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             $data['module_banggood_import_default_currency'] = 'USD';
         }
 
-        $data['banggood_import_log'] = isset($this->session->data['banggood_import_log'])
-            ? $this->session->data['banggood_import_log']
-            : '';
-        unset($this->session->data['banggood_import_log']);
+        // Logging UI disabled by request.
 
         $data['import_category_url'] = $this->url->link(
             'extension/module/banggood_import/importCategory',
@@ -1930,29 +1927,48 @@ HTML;
 
             // IMPORTANT: return the list strictly from bg_fetched_products so the UI matches DB.
             list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
-            // Embed a tiny diagnostic banner directly into HTML so it shows even if the admin JS is cached/old.
-            $diag = 'Build=' . htmlspecialchars(self::BG_IMPORT_BUILD, ENT_QUOTES, 'UTF-8') .
-                    ' • DB=' . htmlspecialchars((string)$persist_db, ENT_QUOTES, 'UTF-8') .
-                    ' • Table=' . htmlspecialchars((string)$persist_tbl, ENT_QUOTES, 'UTF-8') .
-                    ' • TotalRows=' . htmlspecialchars((string)$persist_total, ENT_QUOTES, 'UTF-8') .
-                    ' • Wrote=' . (int)$persisted .
-                    ' • Verified=' . (int)$persist_found . '/' . (int)$persist_expected;
-            $html = '<div class="alert alert-info" style="margin-bottom:10px;">' . $diag . '</div>' . $html;
 
             $json['success'] = true;
             $json['products'] = $collected;
             $json['html'] = $html;
-            $json['persisted'] = (int)$persisted;
-            $json['persisted_tbl'] = $persist_tbl;
-            $json['persist_check'] = array('expected' => (int)$persist_expected, 'found' => (int)$persist_found);
-            $json['persist_db'] = $persist_db;
-            $json['persist_total'] = $persist_total;
             $json['imported'] = (int)$imported;
             $json['import_errors'] = (int)$import_errors;
             $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset);
             $json['finished'] = (bool)$finished;
         } catch (\Exception $e) {
             $json = array('error' => 'fetchProductsChunk failed: ' . $e->getMessage());
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: getFetchedProductsPanel
+     *
+     * Returns the HTML for the "Products" panel from the persisted fetch queue table,
+     * so the admin UI can auto-refresh while imports are running.
+     */
+    public function getFetchedProductsPanel() {
+        $this->load->language('extension/module/banggood_import');
+        $this->load->model('extension/module/banggood_import');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
+            $json['success'] = true;
+            $json['html'] = $html;
+            $json['recent_count'] = (int)$recent_count;
+            $json['total_count'] = (int)$total_count;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getFetchedProductsPanel failed: ' . $e->getMessage();
         }
 
         $this->response->setOutput(json_encode($json));

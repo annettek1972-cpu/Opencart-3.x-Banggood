@@ -1627,7 +1627,7 @@ protected function apiRequestRawSimple($url) {
                 }
             }
         } catch (Exception $e) {
-            error_log('Banggood getStocks error: ' . $e->getMessage());
+            // logging disabled
         }
 
         return $out;
@@ -2043,9 +2043,7 @@ protected function apiRequestRawSimple($url) {
         $yesterday = date('Y-m-d', strtotime('-1 day'));
         try {
             $this->db->query("UPDATE `" . DB_PREFIX . "product` SET `status` = 1, `date_available` = '" . $this->db->escape($yesterday) . "' WHERE product_id = '" . (int)$product_id . "'");
-        } catch (Exception $e) {
-            error_log('Banggood: failed to force-enable product ' . (int)$product_id . ' - ' . $e->getMessage());
-        }
+        } catch (Exception $e) {}
 
         $diagnostics['final_product_qty'] = $this->db->query("SELECT quantity, status, stock_status_id FROM `" . DB_PREFIX . "product` WHERE product_id = " . (int)$product_id . " LIMIT 1")->row;
         $diagnostics['per_poa'] = $per_poa;
@@ -2065,43 +2063,8 @@ protected function apiRequestRawSimple($url) {
        Debug logger (tries multiple locations then error_log)
        ------------------------- */
     protected function writeDebugLog($bg_id, array $diagnostics) {
-        $filename = 'banggood_import_debug_' . preg_replace('/[^0-9A-Za-z_.-]/', '_', $bg_id) . '.log';
-        $entry = array('ts' => date('c'), 'diagnostics' => $diagnostics);
-        $json = json_encode($entry, JSON_PRETTY_PRINT) . PHP_EOL;
-        $candidates = array();
-
-        if (defined('DIR_STORAGE') && DIR_STORAGE) $candidates[] = rtrim(DIR_STORAGE, '/\\') . DIRECTORY_SEPARATOR . $filename;
-        if (defined('DIR_APPLICATION') && DIR_APPLICATION) $candidates[] = rtrim(DIR_APPLICATION, '/\\') . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        if (defined('DIR_SYSTEM') && DIR_SYSTEM) {
-            $candidates[] = rtrim(DIR_SYSTEM, '/\\') . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-            $candidates[] = rtrim(DIR_SYSTEM, '/\\') . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        }
-        if (isset($_SERVER['DOCUMENT_ROOT']) && $_SERVER['DOCUMENT_ROOT']) {
-            $candidates[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\') . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-            $candidates[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\') . DIRECTORY_SEPARATOR . 'system' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        }
-        $tmp = sys_get_temp_dir();
-        if ($tmp) $candidates[] = rtrim($tmp, '/\\') . DIRECTORY_SEPARATOR . $filename;
-
-        $written = false;
-        foreach ($candidates as $path) {
-            $path = str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $path);
-            $dir = dirname($path);
-            if (!is_dir($dir)) @mkdir($dir, 0777, true);
-            $res = @file_put_contents($path, $json, FILE_APPEND | LOCK_EX);
-            if ($res !== false) {
-                $diagnostics['_written_to'] = $path;
-                $written = true;
-                break;
-            }
-        }
-
-        if (!$written) {
-            @error_log("BANGGOOD-IMPORT-LOG: Could not write debug file. Diagnostics: " . json_encode($diagnostics));
-            @error_log("BANGGOOD-IMPORT-LOG-CONTENT: " . (is_string($json) ? substr($json, 0, 1000) : ''));
-        } else {
-            @error_log("BANGGOOD-IMPORT-LOG: wrote debug for bg_id={$bg_id} to " . $diagnostics['_written_to']);
-        }
+        // Logging disabled by request: keep importer silent.
+        return;
     }
 
     /* -------------------------
@@ -2617,29 +2580,29 @@ protected function apiRequestRawSimple($url) {
 
     // Attach options (insert-only) and apply POA quantities / warehouse pricing safely
     if (!empty($product_options) && $product_id) {
-        try { $this->attachProductOptions((int)$product_id, $product_options); } catch (Exception $e) { error_log('attachProductOptions error (create): ' . $e->getMessage()); }
+        try { $this->attachProductOptions((int)$product_id, $product_options); } catch (Exception $e) {}
         if (!empty($poa_list)) {
-            try { $this->applyPoaQuantitiesToProduct((int)$product_id, $poa_list, $normalized['bg_id']); } catch (Exception $e) { error_log('applyPoaQuantitiesToProduct error (create): ' . $e->getMessage()); }
+            try { $this->applyPoaQuantitiesToProduct((int)$product_id, $poa_list, $normalized['bg_id']); } catch (Exception $e) {}
         }
         if (!empty($normalized['raw']['warehouse_list']) && is_array($normalized['raw']['warehouse_list'])) {
-            try { $this->mapAndAttachBanggoodWarehouses($normalized['raw']['warehouse_list'], $normalized['bg_id'], isset($normalized['price']) ? $normalized['price'] : null, (int)$product_id); } catch (Exception $e) { error_log('mapAndAttachBanggoodWarehouses error (create): ' . $e->getMessage()); }
+            try { $this->mapAndAttachBanggoodWarehouses($normalized['raw']['warehouse_list'], $normalized['bg_id'], isset($normalized['price']) ? $normalized['price'] : null, (int)$product_id); } catch (Exception $e) {}
             try {
                 $preferred_wh = $this->config->get('module_banggood_import_preferred_warehouse');
                 $this->applyWarehousePricingToProduct((int)$product_id, $normalized['bg_id'], $preferred_wh ?: null);
-            } catch (Exception $e) { error_log('applyWarehousePricingToProduct error (create): ' . $e->getMessage()); }
+            } catch (Exception $e) {}
         }
     }
 
     // Parse extracted tables into attributes/custom tabs
     if (!empty($tables_to_parse) && !empty($product_id)) {
         foreach ($tables_to_parse as $table_html) {
-            try { $this->parseDescriptionTableToAttributes($table_html, $normalized['bg_id'], (int)$product_id); } catch (Exception $e) { error_log('parseDescriptionTableToAttributes error (create): ' . $e->getMessage()); }
+            try { $this->parseDescriptionTableToAttributes($table_html, $normalized['bg_id'], (int)$product_id); } catch (Exception $e) {}
         }
     }
 
     // Apply stocks and ship-from statuses
-    try { $this->applyStocksToProduct($normalized['bg_id'], (int)$product_id, $this->getBanggoodConfig()); } catch (Exception $e) { error_log('applyStocksToProduct error (create): ' . $e->getMessage()); }
-    try { $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id); } catch (Exception $e) { error_log('syncShipFromStatusesForProduct error (create): ' . $e->getMessage()); }
+    try { $this->applyStocksToProduct($normalized['bg_id'], (int)$product_id, $this->getBanggoodConfig()); } catch (Exception $e) {}
+    try { $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id); } catch (Exception $e) {}
 
     // Generate image cache for product images
     try {
@@ -2649,9 +2612,7 @@ protected function apiRequestRawSimple($url) {
             foreach ($product_image as $pi) if (is_array($pi) && isset($pi['image'])) $imgs[] = $pi['image'];
         }
         $this->generateImageCacheForImages($imgs);
-    } catch (Exception $e) {
-        error_log('generateImageCacheForImages error (create): ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 
     return $product_id;
 }
@@ -2688,9 +2649,7 @@ protected function apiRequestRawSimple($url) {
     try {
         $log_bg_id = isset($normalized['bg_id']) ? $normalized['bg_id'] : ('update-' . $product_id);
         $this->writeDebugLog($log_bg_id, ['notice' => 'description_update_skipped_on_existing_product', 'clean_desc_excerpt' => substr(trim($clean_desc_for_save), 0, 100)]);
-    } catch (Exception $e) {
-        error_log('writeDebugLog error (update description skipped): ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 
     // --- Determine base price: normalized -> compute from maps -> existing DB price ---
     $price = null;
@@ -2703,9 +2662,7 @@ protected function apiRequestRawSimple($url) {
             try {
                 $computed = $this->computeBasePriceFromMaps($bg_id);
                 if ($computed !== null && $computed > 0) $price = (float)$computed;
-            } catch (Exception $e) {
-                error_log('computeBasePriceFromMaps error: ' . $e->getMessage());
-            }
+            } catch (Exception $e) {}
         }
     }
     if (empty($price) || $price <= 0) $price = (float)$product_info['price'];
@@ -2754,9 +2711,7 @@ protected function apiRequestRawSimple($url) {
         foreach ($extracted_tables as $table_html) {
             try {
                 $this->parseDescriptionTableToAttributes($table_html, isset($normalized['bg_id']) ? $normalized['bg_id'] : '', (int)$product_id);
-            } catch (Exception $e) {
-                error_log('parseDescriptionTableToAttributes error (update): ' . $e->getMessage());
-            }
+            } catch (Exception $e) {}
         }
     }
 
@@ -2777,9 +2732,7 @@ protected function apiRequestRawSimple($url) {
         if ($main_image) $imgs[] = $main_image;
         foreach ($gallery_images as $gi) if (is_string($gi)) $imgs[] = $this->toRelativeImagePath($gi);
         $this->generateImageCacheForImages($imgs);
-    } catch (Exception $e) {
-        error_log('generateImageCacheForImages error (update): ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 
     // NEW: Refresh stocks & ship-from statuses for this product based on Banggood data.
     // applyStocksToProduct will update product.quantity, status, stock_status_id,
@@ -2789,9 +2742,7 @@ protected function apiRequestRawSimple($url) {
         if (!empty($normalized['bg_id'])) {
             $diagnostics = $this->applyStocksToProduct($normalized['bg_id'], (int)$product_id, $this->getBanggoodConfig());
         }
-    } catch (Exception $e) {
-        error_log('applyStocksToProduct error (update): ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 
     // If applyStocksToProduct returned final_product_qty, enforce those values on the product row.
     if (!empty($diagnostics) && isset($diagnostics['final_product_qty']) && is_array($diagnostics['final_product_qty'])) {
@@ -2829,9 +2780,7 @@ protected function apiRequestRawSimple($url) {
         if (!empty($normalized['bg_id'])) {
             $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id);
         }
-    } catch (Exception $e) {
-        error_log('syncShipFromStatusesForProduct error (update): ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 
     // BEST-EFFORT: ensure product_variant rows exist after update as well
     try {
@@ -2844,13 +2793,9 @@ protected function apiRequestRawSimple($url) {
             }
             try {
                 $this->upsertProductVariantsFromBgPoa($bg, (int)$product_id, $stocks);
-            } catch (Exception $e) {
-                error_log('Banggood: upsertProductVariantsFromBgPoa (post-update) failed: ' . $e->getMessage());
-            }
+            } catch (Exception $e) {}
         }
-    } catch (Exception $e) {
-        error_log('Banggood: upsertProductVariantsFromBgPoa (post-update outer) failed: ' . $e->getMessage());
-    }
+    } catch (Exception $e) {}
 }
 
     /* -------------------------
@@ -3830,9 +3775,7 @@ protected function apiRequestRawSimple($url) {
             if ($this->config->get('module_banggood_import_persist_customtab')) {
                 try {
                     $this->addOrUpdateProductCustomTab($product_id, $group_name, $html, 0, 1);
-                } catch (Exception $e) {
-                    error_log('Banggood: failed to add/update custom tab: ' . $e->getMessage());
-                }
+                } catch (Exception $e) {}
             }
             return;
         }
@@ -3856,9 +3799,7 @@ protected function apiRequestRawSimple($url) {
             if ($this->config->get('module_banggood_import_persist_customtab')) {
                 try {
                     $this->addOrUpdateProductCustomTab($product_id, $group_name, $html, 0, 1);
-                } catch (Exception $e) {
-                    error_log('Banggood: failed to add/update custom tab: ' . $e->getMessage());
-                }
+                } catch (Exception $e) {}
             }
             return;
         }
@@ -3885,9 +3826,7 @@ protected function apiRequestRawSimple($url) {
         if ($this->config->get('module_banggood_import_persist_customtab')) {
             try {
                 $this->addOrUpdateProductCustomTab($product_id, $group_name, $html, 0, 1);
-            } catch (Exception $e) {
-                error_log('Banggood: failed to add/update custom tab: ' . $e->getMessage());
-            }
+            } catch (Exception $e) {}
         }
     }
 
@@ -4000,7 +3939,6 @@ protected function apiRequestRawSimple($url) {
         try {
             $this->load->model('tool/image');
         } catch (Exception $e) {
-            error_log('Banggood: could not load model_tool_image: ' . $e->getMessage());
             return;
         }
 
@@ -4054,9 +3992,7 @@ protected function apiRequestRawSimple($url) {
                 if ((int)$s['w'] <= 0 || (int)$s['h'] <= 0) continue;
                 try {
                     $this->model_tool_image->resize($img_rel, (int)$s['w'], (int)$s['h']);
-                } catch (Exception $e) {
-                    error_log('Banggood: resize error for ' . $img_rel . ' ' . $s['w'] . 'x' . $s['h'] . ' - ' . $e->getMessage());
-                }
+                } catch (Exception $e) {}
             }
         }
     }
@@ -4097,7 +4033,7 @@ protected function apiRequestRawSimple($url) {
                 @chmod($local_path, 0644);
                 if (@getimagesize($local_path)) return true;
             } catch (Exception $e) {
-                error_log('Banggood: Imagick conversion failed: ' . $e->getMessage());
+                // logging disabled
             }
         }
 
@@ -4134,7 +4070,7 @@ protected function apiRequestRawSimple($url) {
                             return true;
                         } else {
                             $msg = is_array($convert_out) ? implode("\n", $convert_out) : (string)$convert_out;
-                            error_log('Banggood: ImageMagick convert failed (rc=' . intval($convert_rc) . '): ' . $msg);
+                            // logging disabled
                             if (is_file($local_path) && @filesize($local_path) === 0) @unlink($local_path);
                         }
                     } else {
@@ -4142,13 +4078,13 @@ protected function apiRequestRawSimple($url) {
                     }
                 }
             } else {
-                error_log('Banggood: convert binary not found.');
+                // logging disabled
             }
         } else {
-            error_log('Banggood: exec/shell_exec disabled; cannot call ImageMagick convert.');
+            // logging disabled
         }
 
-        error_log('Banggood: could not convert image blob to JPEG for path ' . $local_path . ' (GD, Imagick and convert failed).');
+        // logging disabled
         return false;
     }
 
