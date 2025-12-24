@@ -240,7 +240,7 @@
 								<option value="">{{ option.name }}</option>
 							{% for option_value in option.product_option_value %}
 								{# Do NOT disable OOS options; allow click/preview. Stock is shown dynamically and Add To Cart is disabled instead. #}
-								<option value="{{ option_value.product_option_value_id }}" data-ov="{{ option_value.option_value_id }}" {% if option_value.quantity is defined and option_value.quantity <= 0 and option_value.subtract != 0 %}title="Out of stock"{% endif %}>{{ option_value.name }}
+								<option value="{{ option_value.product_option_value_id }}" data-ov="{{ option_value.option_value_id }}" {% if loop.first %}selected="selected"{% endif %} {% if option_value.quantity is defined and option_value.quantity <= 0 and option_value.subtract != 0 %}title="Out of stock"{% endif %}>{{ option_value.name }}
 								{% if option_value.price %}
 									({{ option_value.price_prefix }}{{ option_value.price }})
 								{% endif %}
@@ -277,10 +277,11 @@
 name="option[{{ option.product_option_id }}]"
 value="{{ option_value.product_option_value_id }}"
 data-ov="{{ option_value.option_value_id }}"
+{% if loop.first %}checked="checked"{% endif %}
 {# Do NOT disable OOS radios; allow selection. #}
 {% if not available %}title="Out of stock"{% endif %} />
 
-											<span class="option-content-box {{ option.name }} blinking" data-title="{{ option_value.name}} {{ radio_price }}" title ="Select {{ option.name }} {{ option_value.name}}">
+											<span class="option-content-box {{ option.name }} blinking{% if loop.first %} active{% endif %}" data-title="{{ option_value.name}} {{ radio_price }}" title ="Select {{ option.name }} {{ option_value.name}}">
 												
 										{% if option.name|lower == 'color' and option_value.image %}
   <img

@@ -1963,10 +1963,34 @@ HTML;
             }
 
             list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
+            // Signature so UI updates when status changes (not only when new rows are added).
+            $tbl = $this->getFetchedProductsTableName();
+            $sigRow = $this->db->query(
+                "SELECT
+                    MAX(GREATEST(
+                        COALESCE(`updated_at`, '0000-00-00 00:00:00'),
+                        COALESCE(`imported_at`, '0000-00-00 00:00:00'),
+                        COALESCE(`fetched_at`,  '0000-00-00 00:00:00')
+                    )) AS last_change,
+                    SUM(`status`='pending') AS pending,
+                    SUM(`status`='processing') AS processing,
+                    SUM(`status`='imported') AS imported,
+                    SUM(`status`='updated') AS updated,
+                    SUM(`status`='error') AS error
+                 FROM `" . $tbl . "`"
+            )->row;
+            $signature = '';
+            $signature .= isset($sigRow['last_change']) ? (string)$sigRow['last_change'] : '';
+            $signature .= '|' . (isset($sigRow['pending']) ? (int)$sigRow['pending'] : 0);
+            $signature .= '|' . (isset($sigRow['processing']) ? (int)$sigRow['processing'] : 0);
+            $signature .= '|' . (isset($sigRow['imported']) ? (int)$sigRow['imported'] : 0);
+            $signature .= '|' . (isset($sigRow['updated']) ? (int)$sigRow['updated'] : 0);
+            $signature .= '|' . (isset($sigRow['error']) ? (int)$sigRow['error'] : 0);
             $json['success'] = true;
             $json['html'] = $html;
             $json['recent_count'] = (int)$recent_count;
             $json['total_count'] = (int)$total_count;
+            $json['signature'] = $signature;
         } catch (\Throwable $e) {
             $json['error'] = 'getFetchedProductsPanel failed: ' . $e->getMessage();
         }

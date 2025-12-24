@@ -368,6 +368,19 @@ class ModelExtensionModuleBanggoodImport extends Model {
             return $txt !== '' ? ('<p>' . htmlspecialchars($txt, ENT_QUOTES, 'UTF-8') . '</p>') : '';
         }
 
+        // Remove style/script/noscript content so CSS/JS text never leaks into textContent.
+        try {
+            $removeTags = array('style', 'script', 'noscript');
+            foreach ($removeTags as $t) {
+                $nodes = $dom->getElementsByTagName($t);
+                // DOMNodeList is live; remove from the end.
+                for ($i = $nodes->length - 1; $i >= 0; $i--) {
+                    $n = $nodes->item($i);
+                    if ($n && $n->parentNode) $n->parentNode->removeChild($n);
+                }
+            }
+        } catch (\Throwable $e) {}
+
         // Replace images with ordered markers, keep their resolved src in a map.
         $imgMap = array(); // marker => imgHtml
         $imgNodes = array();
@@ -892,7 +905,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             $ids = array();
             foreach ($rows as $r) $ids[] = (int)$r['id'];
             // Mark selected rows as processing and increment attempts
-            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1, `updated_at` = NOW() WHERE `id` IN (" . implode(',', $ids) . ")");
         }
 
         return $rows;
@@ -935,7 +948,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         if (empty($bg_product_id)) return;
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
-        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$message) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
+        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$message) . "', `updated_at` = NOW() WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
     }
 
     /**

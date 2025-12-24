@@ -368,6 +368,7 @@ var getFetchedProductsPanelUrl = '{{ ('index.php?route=extension/module/banggood
 
 // Auto-refresh the persisted products panel (shows new rows as they enter DB)
 var bgFetchedTotal = parseInt('{{ bg_fetched_products_total|default(0) }}', 10) || 0;
+var bgFetchedSig = null;
 var bgAutoRefreshTimer = null;
 function refreshFetchedProductsPanel(force) {
   if (!getFetchedProductsPanelUrl) return;
@@ -380,8 +381,10 @@ function refreshFetchedProductsPanel(force) {
       if (!json || json.error) return;
       var total = parseInt(json.total_count, 10) || 0;
       var recent = parseInt(json.recent_count, 10) || 0;
-      if (!force && total === bgFetchedTotal) return;
+      var sig = (json.signature !== null && typeof json.signature !== 'undefined') ? String(json.signature) : null;
+      if (!force && sig !== null && bgFetchedSig !== null && sig === bgFetchedSig) return;
       bgFetchedTotal = total;
+      bgFetchedSig = sig;
       if (typeof json.html !== 'undefined') {
         $('#banggood-products').html(json.html);
         bindImportButtons($('#banggood-products'));
