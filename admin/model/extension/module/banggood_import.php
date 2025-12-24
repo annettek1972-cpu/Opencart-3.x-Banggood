@@ -3580,8 +3580,8 @@ protected function apiRequestRawSimple($url) {
         // Only normalize the known duplicated groups ("Color"/"Size") to avoid changing unrelated option names.
         if (!preg_match('/^(color|colour|size)\b/i', $name)) return $name;
 
-        // Remove a trailing colon (some feeds use "Color:" / "Size:")
-        $name = preg_replace('/\s*:\s*$/u', '', $name);
+        // Remove trailing punctuation/spacers (e.g. "Color.", "Color:", "Size -", "Size_")
+        $name = preg_replace('/[\s\.\:\-–—_]+$/u', '', $name);
 
         // Normalize compact forms like "Color1" / "Size2" -> "Color 1" / "Size 2"
         if (preg_match('/^(color|colour|size)(\d+)$/i', $name, $m)) {
