@@ -350,6 +350,63 @@ class ModelExtensionModuleBanggoodImport extends Model {
 
     return trim($out);
 }
+
+    /**
+     * Download binary content from URL in a hosting-friendly way.
+     * Prefer cURL (works when allow_url_fopen is disabled).
+     */
+    protected function httpGetBinary($url, $timeout = 25) {
+        $url = (string)$url;
+        if ($url === '' || stripos($url, 'http') !== 0) return null;
+
+        if (function_exists('curl_init')) {
+            try {
+                $ch = curl_init($url);
+                curl_setopt_array($ch, array(
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_CONNECTTIMEOUT => 8,
+                    CURLOPT_TIMEOUT => max(5, (int)$timeout),
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYHOST => false,
+                    CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
+                ));
+                $data = curl_exec($ch);
+                $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                if ($data !== false && is_string($data) && strlen($data) > 100 && $code >= 200 && $code < 400) {
+                    return $data;
+                }
+            } catch (\Throwable $e) {}
+        }
+
+        // Fallback: file_get_contents (requires allow_url_fopen)
+        try {
+            $data = @file_get_contents($url);
+            if ($data !== false && is_string($data) && strlen($data) > 100) return $data;
+        } catch (\Throwable $e) {}
+
+        return null;
+    }
+
+    /**
+     * Ensure product is always linked to the fixed category (787).
+     * Does not remove other categories.
+     */
+    protected function ensureFixedCategoryLink($product_id) {
+        $product_id = (int)$product_id;
+        if (!$product_id) return;
+        $category_id = (int)self::FIXED_PRODUCT_CATEGORY_ID;
+        if (!$category_id) return;
+        try {
+            $this->db->query(
+                "INSERT IGNORE INTO `" . DB_PREFIX . "product_to_category` (product_id, category_id)
+                 VALUES (" . (int)$product_id . ", " . (int)$category_id . ")"
+            );
+        } catch (\Throwable $e) {
+            // non-fatal
+        }
+    }
 	
 
     /* -------------------------
@@ -1618,11 +1675,14 @@ protected function apiRequestRawSimple($url) {
 
                 if (isset($warehouse_block[$list_key]) && is_array($warehouse_block[$list_key])) {
                     foreach ($warehouse_block[$list_key] as $sl) {
-                        $poa_id = isset($sl['poa_id']) ? (string)$sl['poa_id'] : (isset($sl['poaId']) ? (string)$sl['poaId'] : '');
+                        $poa_id = isset($sl['poa_id']) ? (string)$sl['poa_id'] : (isset($sl['poaId']) ? (string)$sl['poaId'] : (isset($sl['poa_ids']) ? (string)$sl['poa_ids'] : ''));
                         $poa = isset($sl['poa']) ? (string)$sl['poa'] : (isset($sl['poa_name']) ? (string)$sl['poa_name'] : '');
                         $stock = 0;
                         if (isset($sl['stock']) && is_numeric($sl['stock'])) $stock = (int)$sl['stock'];
                         elseif (isset($sl['stock_num']) && is_numeric($sl['stock_num'])) $stock = (int)$sl['stock_num'];
+                        elseif (isset($sl['stockNum']) && is_numeric($sl['stockNum'])) $stock = (int)$sl['stockNum'];
+                        elseif (isset($sl['qty']) && is_numeric($sl['qty'])) $stock = (int)$sl['qty'];
+                        elseif (isset($sl['quantity']) && is_numeric($sl['quantity'])) $stock = (int)$sl['quantity'];
                         else {
                             if (preg_match('/(-?\d+)/', (string)(isset($sl['stock']) ? $sl['stock'] : ''), $m)) $stock = (int)$m[1];
                         }
@@ -2214,6 +2274,18 @@ protected function apiRequestRawSimple($url) {
             $raw = $this->fetchProductDetail($config, $product_id);
             $normalized = $this->normalizeProduct($raw, $config);
             $result = $this->upsertProduct($normalized);
+            // Ensure fixed category is always linked (especially for updates)
+            $oc_product_id = (int)$this->findExistingProductByBanggoodId((string)$normalized['bg_id']);
+            if ($oc_product_id > 0) {
+                $this->ensureFixedCategoryLink($oc_product_id);
+                // Keep option stock levels + oc_product_variant in sync for URL imports too
+                try { $this->applyStocksToProduct((string)$normalized['bg_id'], $oc_product_id, $this->getBanggoodConfig()); } catch (\Throwable $e) {}
+                try { $this->syncShipFromStatusesForProduct((string)$normalized['bg_id'], $oc_product_id); } catch (\Throwable $e) {}
+            }
+
+            // Keep fetched-products queue status accurate
+            try { $this->markFetchedProductImported((string)$product_id); } catch (\Throwable $e) {}
+
             return array('created' => $result === 'created', 'updated' => $result === 'updated');
         } finally {
             if ($allow_map_writes) {
@@ -2758,7 +2830,30 @@ protected function apiRequestRawSimple($url) {
          WHERE product_id = " . (int)$product_id
     );
 
+    // Always ensure this product is linked to the fixed import category (787)
+    $this->ensureFixedCategoryLink((int)$product_id);
+
     // NOTE: intentionally do NOT update product_description here (we only set description on first import)
+    // But we DO ensure any existing <img> tags are localized to your server (no hotlinks).
+    try {
+        $bgid_for_desc = isset($normalized['bg_id']) ? (string)$normalized['bg_id'] : '';
+        if ($bgid_for_desc !== '') {
+            $pd = $this->db->query("SELECT language_id, description FROM `" . DB_PREFIX . "product_description` WHERE product_id = " . (int)$product_id);
+            if ($pd && $pd->num_rows) {
+                foreach ($pd->rows as $row) {
+                    $lid = (int)$row['language_id'];
+                    $desc_old = (string)$row['description'];
+                    if ($desc_old === '') continue;
+                    $desc_new = $this->localizeDescriptionImages($desc_old, $bgid_for_desc);
+                    if (is_string($desc_new) && $desc_new !== '' && $desc_new !== $desc_old) {
+                        $this->db->query("UPDATE `" . DB_PREFIX . "product_description` SET description = '" . $this->db->escape($desc_new) . "' WHERE product_id = " . (int)$product_id . " AND language_id = " . (int)$lid);
+                    }
+                }
+            }
+        }
+    } catch (\Throwable $e) {
+        // non-fatal
+    }
 
     // Parse extracted tables into attributes/custom tabs (non-destructive)
     if (!empty($extracted_tables)) {
@@ -2924,8 +3019,8 @@ protected function apiRequestRawSimple($url) {
             $best = null;
             foreach ($try_urls as $tu) {
                 if (!$tu) continue;
-                $img_data = @file_get_contents($tu);
-                if ($img_data === false || strlen($img_data) < 100) continue;
+                $img_data = $this->httpGetBinary($tu, 25);
+                if ($img_data === null || strlen($img_data) < 100) continue;
                 $info = @getimagesizefromstring($img_data);
                 $width = isset($info[0]) ? (int)$info[0] : 0;
                 $height = isset($info[1]) ? (int)$info[1] : 0;
@@ -2945,6 +3040,7 @@ protected function apiRequestRawSimple($url) {
                 @file_put_contents($local_path, $best['data']);
             }
             if (is_file($local_path) && filesize($local_path) > 100) {
+                @chmod($local_path, 0644);
                 $info2 = @getimagesize($local_path);
                 $w2 = isset($info2[0]) ? (int)$info2[0] : $best['width'];
                 $h2 = isset($info2[1]) ? (int)$info2[1] : $best['height'];
@@ -2999,11 +3095,11 @@ protected function apiRequestRawSimple($url) {
             if (strpos($src, '//') === 0) $src = 'https:' . $src;
             if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) continue;
 
-            // Only Banggood-hosted images
+            // Description images: always localize remote images to avoid hotlinks.
             $host = '';
             $p = @parse_url($src);
             if (is_array($p) && !empty($p['host'])) $host = strtolower($p['host']);
-            if ($host === '' || strpos($host, 'banggood.com') === false) continue;
+            if ($host === '') continue;
 
             $norm = preg_replace('/(\?.*)$/', '', $src);
             if (isset($seen[$norm])) {
@@ -3015,24 +3111,18 @@ protected function apiRequestRawSimple($url) {
             $idx++;
             $local_path = $img_dir . $file_name;
 
+            // Try alternate URL forms before giving up
+            $try_urls = array($src);
+            if (strpos($src, '/thumb/') !== false) { $try_urls[] = str_replace('/thumb/', '/images/', $src); $try_urls[] = str_replace('/thumb/', '/large/', $src); }
+            if (strpos($src, '/thumb/view/') !== false) $try_urls[] = str_replace('/thumb/view/', '/images/', $src);
+            $try_urls[] = preg_replace('/(\?.*)$/', '', $src);
+
             $data = null;
-            try {
-                $curl_opts = array(
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_CONNECTTIMEOUT => 5,
-                    CURLOPT_TIMEOUT => 25,
-                    CURLOPT_SSL_VERIFYPEER => false,
-                    CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
-                );
-                $ch = curl_init($src);
-                curl_setopt_array($ch, $curl_opts);
-                $data = curl_exec($ch);
-                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                if ($data === false || strlen($data) < 200 || $code < 200 || $code >= 400) $data = null;
-            } catch (\Throwable $e) {
-                $data = null;
+            foreach ($try_urls as $tu) {
+                $tu = (string)$tu;
+                if ($tu === '') continue;
+                $data = $this->httpGetBinary($tu, 25);
+                if ($data !== null) break;
             }
             if ($data === null) continue;
 
@@ -3040,6 +3130,7 @@ protected function apiRequestRawSimple($url) {
             $ok = $this->writeJpegFromData($data, $local_path);
             if (!$ok) @file_put_contents($local_path, $data);
             if (!is_file($local_path) || filesize($local_path) < 100) continue;
+            @chmod($local_path, 0644);
 
             $rel = $this->toRelativeImagePath($folder . $file_name);
             if (!$rel) continue;
