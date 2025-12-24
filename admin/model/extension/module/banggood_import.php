@@ -3861,6 +3861,8 @@ protected function apiRequestRawSimple($url) {
         if ($s === null) return '';
         if (!is_string($s)) $s = (string)$s;
         $s = html_entity_decode($s, ENT_QUOTES, 'UTF-8');
+        // Normalize NBSP and other odd whitespace to spaces
+        $s = str_replace("\xc2\xa0", ' ', $s);
         $s = trim($s);
         $s = preg_replace('/\s+/u', ' ', $s);
         $s = preg_replace('/\s*:\s*$/u', '', $s);
@@ -3893,6 +3895,20 @@ protected function apiRequestRawSimple($url) {
              LIMIT 1"
         );
         if ($q2->num_rows) return (int)$q2->row['option_id'];
+
+        // Fallback: PHP-side normalization compare (handles NBSP, weird whitespace, etc.)
+        // Only runs when exact+SQL-normalized match fails.
+        try {
+            $rows = $this->db->query(
+                "SELECT o.option_id, od.`name`
+                 FROM `" . DB_PREFIX . "option_description` od
+                 JOIN `" . DB_PREFIX . "option` o ON o.option_id = od.option_id"
+            )->rows;
+            foreach ($rows as $r) {
+                $n = isset($r['name']) ? $this->normalizeOptionLabel($r['name']) : '';
+                if ($n !== '' && $n === $name_norm) return (int)$r['option_id'];
+            }
+        } catch (\Throwable $e) {}
 
         return 0;
     }
@@ -3936,6 +3952,20 @@ protected function apiRequestRawSimple($url) {
              LIMIT 1"
         );
         if ($q2->num_rows) return (int)$q2->row['option_value_id'];
+
+        // Fallback: PHP-side normalization compare (handles NBSP, weird whitespace, etc.)
+        try {
+            $rows = $this->db->query(
+                "SELECT ov.option_value_id, ovd.`name`
+                 FROM `" . DB_PREFIX . "option_value` ov
+                 JOIN `" . DB_PREFIX . "option_value_description` ovd ON ov.option_value_id = ovd.option_value_id
+                 WHERE ov.option_id = '" . (int)$option_id . "'"
+            )->rows;
+            foreach ($rows as $r) {
+                $n = isset($r['name']) ? $this->normalizeOptionLabel($r['name']) : '';
+                if ($n !== '' && $n === $value_norm) return (int)$r['option_value_id'];
+            }
+        } catch (\Throwable $e) {}
 
         return 0;
     }
