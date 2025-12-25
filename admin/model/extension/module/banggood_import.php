@@ -8,7 +8,7 @@ class ModelExtensionModuleBanggoodImport extends Model {
     // Backward compatibility for older imports
     const LEGACY_PRODUCT_CODE_PREFIX = 'BG-';
     // All imported products should be assigned to this OpenCart category (never updated after first import)
-    const FIXED_PRODUCT_CATEGORY_ID = 787;
+    const FIXED_PRODUCT_CATEGORY_ID = 1;
 
     private $token_cache_file;
     public function __construct($registry) {
