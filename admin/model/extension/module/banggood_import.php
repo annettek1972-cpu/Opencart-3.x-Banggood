@@ -2960,6 +2960,14 @@ protected function apiRequestRawSimple($url) {
         if (empty($html) || !is_string($html)) return $html;
         $bg_id = (string)$bg_id;
 
+        // Build a full base URL so <img src> in description always renders (use catalog URL when available).
+        $base_url = '';
+        if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) $base_url = HTTPS_CATALOG;
+        elseif (defined('HTTP_CATALOG') && HTTP_CATALOG) $base_url = HTTP_CATALOG;
+        elseif (defined('HTTPS_SERVER') && HTTPS_SERVER) $base_url = HTTPS_SERVER;
+        elseif (defined('HTTP_SERVER') && HTTP_SERVER) $base_url = HTTP_SERVER;
+        if ($base_url !== '' && substr($base_url, -1) !== '/') $base_url .= '/';
+
         libxml_use_internal_errors(true);
         $dom = new DOMDocument();
         $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?><div id="bg_desc_root">' . $html . '</div>');
@@ -2997,7 +3005,7 @@ protected function apiRequestRawSimple($url) {
 
             $norm = preg_replace('/(\?.*)$/', '', $src);
             if (isset($seen[$norm])) {
-                $img->setAttribute('src', 'image/' . ltrim($seen[$norm], '/'));
+                $img->setAttribute('src', $base_url . 'image/' . ltrim($seen[$norm], '/'));
                 continue;
             }
 
@@ -3035,7 +3043,7 @@ protected function apiRequestRawSimple($url) {
             if (!$rel) continue;
 
             $seen[$norm] = $rel;
-            $img->setAttribute('src', 'image/' . ltrim($rel, '/'));
+            $img->setAttribute('src', $base_url . 'image/' . ltrim($rel, '/'));
         }
 
         // Return inner HTML
