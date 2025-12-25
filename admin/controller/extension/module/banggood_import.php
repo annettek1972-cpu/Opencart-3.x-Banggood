@@ -1239,6 +1239,41 @@ HTML;
     }
 
     /**
+     * AJAX: getFetchedProductsList
+     *
+     * Returns the persisted fetched-products (queue) list HTML and counts so the admin UI can live-refresh
+     * import statuses (pending/processing/imported/error) without a full page reload.
+     */
+    public function getFetchedProductsList() {
+        $this->load->language('extension/module/banggood_import');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $limit = isset($this->request->post['limit']) ? (int)$this->request->post['limit'] : 200;
+            if ($limit < 1) $limit = 1;
+            if ($limit > 500) $limit = 500;
+
+            list($html, $recent_count, $total_count) = $this->renderFetchedProductsList($limit);
+            $json['success'] = true;
+            $json['html'] = $html;
+            $json['recent_count'] = (int)$recent_count;
+            $json['total_count'] = (int)$total_count;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getFetchedProductsList failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
      * AJAX: importProductById
      *
      * Imports a product by Banggood product_id (calls model importProductById()).

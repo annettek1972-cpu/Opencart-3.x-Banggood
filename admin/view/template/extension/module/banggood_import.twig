@@ -372,6 +372,10 @@ var fetchChunkUrl = '{{ ('index.php?route=extension/module/banggood_import/fetch
 var resetFetchCursorUrl = '{{ ('index.php?route=extension/module/banggood_import/resetFetchCursor&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/getProductUpdateList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+
+// Track what the Products panel is showing so we only auto-refresh the persisted queue view.
+var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
 
 // Bind import-by-id buttons inside a container
 function bindImportButtons($container) {
@@ -810,6 +814,7 @@ $('#input-overwrite-option-images').on('change', function() {
 // Load products for a single category (paged)
 function loadProducts(cat_id, page) {
   page = page || 1;
+  bgProductsMode = 'category';
   var $panel = $('#banggood-products');
   $panel.html('<div class="text-center" style="padding:40px 0;"><i class="fa fa-spinner fa-spin fa-2x"></i><div class="text-muted">Loading products...</div></div>');
 
@@ -858,6 +863,7 @@ $('#btn-fetch-chunk').on('click', function(e){
   e.preventDefault();
   var $btn = $(this);
   var $panel = $('#banggood-products');
+  bgProductsMode = 'persisted';
   var count = parseInt($('#bg-fetch-count').val(), 10);
   if (!count || count < 1) count = 10;
   if (count > 500) count = 500;
@@ -907,6 +913,7 @@ $('#btn-fetch-updates').on('click', function(e){
   e.preventDefault();
   var $btn = $(this);
   var $panel = $('#banggood-products');
+  bgProductsMode = 'updates';
 
   var minutes = parseInt($('#bg-update-minutes').val(), 10);
   if (!minutes || minutes < 1) minutes = 30;
@@ -947,6 +954,7 @@ $('#btn-fetch-updates').on('click', function(e){
 $('#btn-clear-products').on('click', function(e){
   e.preventDefault();
   $('#banggood-products').empty();
+  bgProductsMode = 'other';
 });
 
 $('#btn-reset-fetch').on('click', function(e){
@@ -990,5 +998,46 @@ $(document).ready(function() {
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
   }
+
+  // Auto-refresh persisted products queue so import status badges update live.
+  // Only runs when the products panel is showing the persisted queue view.
+  var bgQueueRefreshTimer = null;
+  var bgQueueRefreshInFlight = false;
+  var lastQueueHtml = null;
+
+  function refreshPersistedQueueOnce() {
+    if (bgQueueRefreshInFlight) return;
+    if (bgProductsMode !== 'persisted') return;
+    if (!$('#banggood-products').length) return;
+
+    bgQueueRefreshInFlight = true;
+    $.ajax({
+      url: getFetchedProductsListUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { limit: 200 },
+      success: function(json) {
+        if (!json || json.error) return;
+        if (typeof json.recent_count !== 'undefined') {
+          $('#bg-persisted-count').text('(' + (json.recent_count || 0) + ')');
+        }
+        if (typeof json.html === 'string') {
+          // Avoid DOM churn if nothing changed
+          if (lastQueueHtml !== json.html) {
+            lastQueueHtml = json.html;
+            $('#banggood-products').html(json.html);
+          }
+        }
+      },
+      complete: function() {
+        bgQueueRefreshInFlight = false;
+      }
+    });
+  }
+
+  // Start polling (every 5s). Cheap/no-op when not in persisted mode.
+  bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
+  // Also do a single refresh shortly after page load.
+  setTimeout(refreshPersistedQueueOnce, 800);
 });
 </script>
