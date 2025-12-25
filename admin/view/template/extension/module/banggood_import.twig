@@ -111,7 +111,18 @@
                     ({{ bg_fetched_products_count|default(0) }})
                   </small>
                 </h4>
-                <div><!-- intentionally left empty to keep heading balanced --></div>
+                <div id="bg-queue-pager" style="display:flex;align-items:center;gap:6px;">
+                  <button type="button" id="bg-queue-prev" class="btn btn-default btn-xs" title="Previous page" style="min-width:60px;">Prev</button>
+                  <span class="text-muted" style="font-size:12px;white-space:nowrap;">
+                    Page <span id="bg-queue-page">1</span>/<span id="bg-queue-page-total">1</span>
+                  </span>
+                  <button type="button" id="bg-queue-next" class="btn btn-default btn-xs" title="Next page" style="min-width:60px;">Next</button>
+                  <select id="bg-queue-limit" class="form-control input-sm" style="width:90px;height:24px;padding:2px 6px;" title="Rows per page">
+                    <option value="25">25</option>
+                    <option value="50" selected="selected">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
               </div>
 
               <div id="banggood-products" aria-live="polite" style="margin-top:12px;">
@@ -373,9 +384,14 @@ var resetFetchCursorUrl = '{{ ('index.php?route=extension/module/banggood_import
 var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/getProductUpdateList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
+
+// Persisted queue pagination state (AJAX)
+var bgQueuePage = 1;
+var bgQueueLimit = 50;
 
 // Bind import-by-id buttons inside a container
 function bindImportButtons($container) {
@@ -1005,6 +1021,15 @@ $(document).ready(function() {
   var bgQueueRefreshInFlight = false;
   var lastQueueHtml = null;
 
+  function syncQueuePagerUi(page, pageTotal) {
+    page = parseInt(page, 10); if (!page || page < 1) page = 1;
+    pageTotal = parseInt(pageTotal, 10); if (!pageTotal || pageTotal < 1) pageTotal = 1;
+    $('#bg-queue-page').text(String(page));
+    $('#bg-queue-page-total').text(String(pageTotal));
+    $('#bg-queue-prev').prop('disabled', page <= 1);
+    $('#bg-queue-next').prop('disabled', page >= pageTotal);
+  }
+
   function refreshPersistedQueueOnce() {
     if (bgQueueRefreshInFlight) return;
     if (bgProductsMode !== 'persisted') return;
@@ -1012,14 +1037,19 @@ $(document).ready(function() {
 
     bgQueueRefreshInFlight = true;
     $.ajax({
-      url: getFetchedProductsListUrl,
+      url: getFetchedProductsListPagedUrl,
       type: 'post',
       dataType: 'json',
-      data: { limit: 200 },
+      data: { limit: bgQueueLimit, page: bgQueuePage },
       success: function(json) {
         if (!json || json.error) return;
-        if (typeof json.recent_count !== 'undefined') {
-          $('#bg-persisted-count').text('(' + (json.recent_count || 0) + ')');
+        if (typeof json.total_count !== 'undefined') {
+          $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
+        }
+        if (typeof json.page !== 'undefined' && typeof json.page_total !== 'undefined') {
+          // server may clamp page; keep client in sync
+          bgQueuePage = parseInt(json.page, 10) || bgQueuePage;
+          syncQueuePagerUi(json.page, json.page_total);
         }
         if (typeof json.html === 'string') {
           // Avoid DOM churn if nothing changed
@@ -1034,6 +1064,31 @@ $(document).ready(function() {
       }
     });
   }
+
+  // Pager controls (AJAX)
+  $('#bg-queue-prev').on('click', function(e){
+    e.preventDefault();
+    bgProductsMode = 'persisted';
+    if (bgQueuePage > 1) bgQueuePage -= 1;
+    refreshPersistedQueueOnce();
+  });
+  $('#bg-queue-next').on('click', function(e){
+    e.preventDefault();
+    bgProductsMode = 'persisted';
+    bgQueuePage += 1;
+    refreshPersistedQueueOnce();
+  });
+  $('#bg-queue-limit').on('change', function(){
+    var v = parseInt($(this).val(), 10);
+    if (!v || v < 1) v = 50;
+    bgQueueLimit = v;
+    bgQueuePage = 1;
+    bgProductsMode = 'persisted';
+    refreshPersistedQueueOnce();
+  });
+  // Initialize limit selector to our default
+  try { $('#bg-queue-limit').val(String(bgQueueLimit)); } catch(e) {}
+  syncQueuePagerUi(bgQueuePage, 1);
 
   // Start polling (every 5s). Cheap/no-op when not in persisted mode.
   bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
