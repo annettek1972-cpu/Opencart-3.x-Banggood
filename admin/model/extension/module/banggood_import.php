@@ -340,7 +340,41 @@ class ModelExtensionModuleBanggoodImport extends Model {
     return trim($out);
 }
 	
+protected function normalizeImportedOptionName($name) {
+    if ($name === null) return '';
+    // Decode entities and normalize whitespace
+    $name = html_entity_decode((string)$name, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $name = preg_replace('/\s+/', ' ', trim($name));
 
+    if ($name === '') return '';
+
+    // Remove trailing colon
+    $name = preg_replace('/\s*:\s*$/u', '', $name);
+
+    // Remove trailing ordinal/number tokens like " 1", "-1", "(1)" etc.
+    $name = preg_replace('/[\s\-\_\:\(\)\[\]]*\d+\s*$/u', '', $name);
+
+    // Normalize common synonyms and canonicalize exact group names
+    // If it begins with color/colour -> canonical "Color"
+    if (preg_match('/^\s*(color|colour)\b/i', $name)) {
+        return 'Color';
+    }
+
+    // If it begins with size -> canonical "Size"
+    if (preg_match('/^\s*(size)\b/i', $name)) {
+        return 'Size';
+    }
+
+    // Remove stray "Group" suffixes like "Color Group", "Size Group"
+    $name = preg_replace('/\b(group|grouping)\b$/i', '', $name);
+    $name = trim($name);
+
+    // Capitalize words (keep acronyms as-is)
+    // Use mb_convert_case for multibyte safety
+    $name = mb_convert_case($name, MB_CASE_TITLE, 'UTF-8');
+
+    return $name;
+}
     /* -------------------------
        Helper: ensure warehouse-per-poa map table exists
        ------------------------- */
@@ -3181,6 +3215,7 @@ protected function apiRequestRawSimple($url) {
                     $value_name = isset($val['poa_name']) ? $val['poa_name'] : (isset($val['name']) ? $val['name'] : (isset($val['poa_value']) ? $val['poa_value'] : ''));
                     if ($value_name === '') continue;
 
+
                     // compute sort order for sizes
                     $sort_order = 0;
                     if ($is_size_option) {
@@ -3557,23 +3592,67 @@ protected function apiRequestRawSimple($url) {
     }
 
     protected function getOptionIdByName($name) {
-        $name_esc = $this->db->escape($name);
-        $sql = "SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $name_esc . "' LIMIT 1";
-        $query = $this->db->query($sql);
-        if ($query->num_rows) return (int)$query->row['option_id'];
-        return 0;
+    $name = (string)$name;
+    if ($name === '') return 0;
+
+    // First try normalized canonical name
+    $canonical = $this->normalizeImportedOptionName($name);
+
+    // 1) exact match on normalized name
+    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $this->db->escape($canonical) . "' LIMIT 1");
+    if ($q && $q->num_rows) return (int)$q->row['option_id'];
+
+    // 2) exact match on original (case-insensitive)
+    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE LCASE(`name`) = LCASE('" . $this->db->escape($name) . "') LIMIT 1");
+    if ($q && $q->num_rows) return (int)$q->row['option_id'];
+
+    // 3) try case-insensitive exact match on canonical if different from original
+    if ($canonical !== $name) {
+        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE LCASE(`name`) = LCASE('" . $this->db->escape($canonical) . "') LIMIT 1");
+        if ($q && $q->num_rows) return (int)$q->row['option_id'];
     }
 
-    protected function addOption($name, $type = 'radio') {
-        $this->db->query("INSERT INTO `" . DB_PREFIX . "option` SET `type` = '" . $this->db->escape($type) . "', `sort_order` = 0");
-        $option_id = $this->db->getLastId();
-        $this->load->model('localisation/language');
-        $languages = $this->model_localisation_language->getLanguages();
-        foreach ($languages as $language) {
-            $this->db->query("INSERT INTO `" . DB_PREFIX . "option_description` SET `option_id` = '" . (int)$option_id . "', `language_id` = '" . (int)$language['language_id'] . "', `name` = '" . $this->db->escape($name) . "'");
-        }
-        return (int)$option_id;
+    // 4) relaxed: look for options that start with the canonical token (e.g. "Color", "Color 1", "Color A")
+    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` LIKE '" . $this->db->escape($canonical) . "%' LIMIT 1");
+    if ($q && $q->num_rows) return (int)$q->row['option_id'];
+
+    // 5) try removing trailing numbers from original and search
+    $base = preg_replace('/[\s\-\_\:\(\)\[\]]*\d+\s*$/u', '', $name);
+    $base = trim($base);
+    if ($base !== '' && $base !== $name) {
+        $baseCanonical = $this->normalizeImportedOptionName($base);
+        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $this->db->escape($baseCanonical) . "' LIMIT 1");
+        if ($q && $q->num_rows) return (int)$q->row['option_id'];
+
+        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` LIKE '" . $this->db->escape($baseCanonical) . "%' LIMIT 1");
+        if ($q && $q->num_rows) return (int)$q->row['option_id'];
     }
+
+    // Not found
+    return 0;
+}
+
+   protected function addOption($name, $type = 'radio') {
+    $name = (string)$name;
+    if ($name === '') return 0;
+
+    // If an option with this name (or a canonical variant) already exists, reuse it
+    $existing = $this->getOptionIdByName($name);
+    if ($existing) return (int)$existing;
+
+    // Insert new option
+    $this->db->query("INSERT INTO `" . DB_PREFIX . "option` SET `type` = '" . $this->db->escape($type) . "', `sort_order` = 0");
+    $option_id = $this->db->getLastId();
+
+    // Insert descriptions for all languages
+    $this->load->model('localisation/language');
+    $languages = $this->model_localisation_language->getLanguages();
+    $canonical = $this->normalizeImportedOptionName($name);
+    foreach ($languages as $language) {
+        $this->db->query("INSERT INTO `" . DB_PREFIX . "option_description` SET `option_id` = '" . (int)$option_id . "', `language_id` = '" . (int)$language['language_id'] . "', `name` = '" . $this->db->escape($canonical) . "'");
+    }
+    return (int)$option_id;
+}
 
     protected function getOptionValueIdByName($option_id, $value_name) {
         $value_name_esc = $this->db->escape($value_name);
@@ -4193,6 +4272,7 @@ protected function apiRequestRawSimple($url) {
     public function refreshBgCategories() {
         $inserted = 0;
         $updated = 0;
+
 
         // Determine source table candidates (import first)
         $sourceCandidates = [
