@@ -57,9 +57,9 @@
 
               {# Mirror state badge (clickable) #}
               {% if module_banggood_import_delete_missing %}
-                <span id="bg-mirror-badge" class="label label-success" style="margin-left:8px;padding: 12px; cursor:pointer;" title="Click to toggle mirror">Mirror ON</span>
+                <span id="bg-mirror-badge" class="label label-success" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror ON</span>
               {% else %}
-                <span id="bg-mirror-badge" class="label label-default" style="margin-left:8px;padding: 12px; cursor:pointer;" title="Click to toggle mirror">Mirror OFF</span>
+                <span id="bg-mirror-badge" class="label label-default" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror OFF</span>
               {% endif %}
             </div>
 
@@ -360,6 +360,13 @@
     width: 22px;
     display: inline-block;
   }
+
+  /* Pagination controls styling (narrowly scoped) */
+  #bg-products-pagination-controls { margin-bottom: 8px; display:flex; align-items:center; gap:8px; justify-content:space-between; }
+  #bg-products-pagination-controls .pg-actions { display:flex; gap:6px; align-items:center; }
+  #bg-products-pagination-controls .pg-pages { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+  #bg-products-pagination-controls .pg-page { padding:4px 8px; border:1px solid #ddd; border-radius:3px; cursor:pointer; background:#fff; }
+  #bg-products-pagination-controls .pg-page.active { background:#007bff; color:#fff; border-color:#007bff; }
 </style>
 
 <script type="text/javascript">
@@ -561,8 +568,22 @@ function initBanggoodCategoryTree() {
     }
   });
 
-  // Label click disabled: do nothing (category click-to-load-products removed)
-  $tree.find('.cat-label, .bg-label').off('click');
+  // Label click selects category visually (and loads products)
+  $tree.find('.cat-label, .bg-label').off('click').on('click', function(e) {
+    e.stopPropagation();
+    $tree.find('.cat-label, .bg-label').removeClass('selected');
+    $(this).addClass('selected');
+
+    // determine category id from various possible attributes
+    var cid = $(this).attr('data-cat-id') || $(this).closest('li').attr('data-bg-id') || $(this).closest('li').attr('data-id') || '';
+    if (!cid) {
+      var badge = $(this).find('.bg-id');
+      if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
+    }
+    if (cid) {
+      loadProducts(cid, 1);
+    }
+  });
 
   // copy id badges
   $tree.find('.bg-id').off('click').on('click', function(e){
@@ -976,5 +997,213 @@ $(document).ready(function() {
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
   }
+
+  // Ensure persisted product import buttons bound for initial server-rendered list
+  bindImportButtons($('#banggood-products'));
 });
+
+/*
+  ADDITION: Client-side AJAX pagination + live refresh for the persisted fetched-products list.
+
+  - Implements client-side pagination of rows with class `.bg-compact-row`.
+  - Polls the current page periodically and replaces the persisted-products container when changes are detected.
+  - New items (or status changes) are injected so admin sees "newest first" ordering preserved.
+  - Does not change any server endpoints, only does AJAX GET of the current page and extracts #banggood-products HTML.
+*/
+
+(function($){
+  var pageSize = 10;                 // default items per page
+  var currentPage = 1;
+  var items = [];                    // array of HTML strings for .bg-compact-row
+  var pollIntervalMs = 8000;         // poll every 8 seconds
+  var pollTimer = null;
+  var paginationContainerId = 'bg-products-pagination-controls';
+
+  function collectItemsFromContainer($container) {
+    var arr = [];
+    $container.find('.bg-compact-row').each(function(){
+      arr.push($(this).prop('outerHTML'));
+    });
+    return arr;
+  }
+
+  function buildPaginationControls(totalCount, pageCount, current) {
+    var $controls = $('<div id="' + paginationContainerId + '"></div>');
+    var $left = $('<div class="pg-actions"></div>');
+    var $right = $('<div class="pg-pages"></div>');
+    var $info = $('<div class="pg-info text-muted"></div>').text('Showing page ' + current + ' of ' + pageCount + ' (' + totalCount + ' items)');
+    var $prev = $('<button type="button" class="btn btn-default btn-sm" data-action="prev">Prev</button>');
+    var $next = $('<button type="button" class="btn btn-default btn-sm" data-action="next">Next</button>');
+    $left.append($prev).append($next);
+    $left.append($info);
+
+    // page numbers (limited window)
+    var maxButtons = 7;
+    var start = Math.max(1, current - 3);
+    var end = Math.min(pageCount, start + maxButtons - 1);
+    if (end - start + 1 < maxButtons) start = Math.max(1, end - maxButtons + 1);
+
+    for (var i = start; i <= end; i++) {
+      var $p = $('<span class="pg-page"></span>').text(i).attr('data-page', i);
+      if (i === current) $p.addClass('active');
+      $right.append($p);
+    }
+
+    $controls.append($left).append($right);
+    return $controls;
+  }
+
+  function renderPage(page) {
+    currentPage = page || 1;
+    if (currentPage < 1) currentPage = 1;
+    var total = items.length;
+    var totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    // slice items (newest first assumed already: items[0] newest)
+    var start = (currentPage - 1) * pageSize;
+    var end = Math.min(total, start + pageSize);
+    var html = '';
+    for (var i = start; i < end; i++) html += items[i];
+
+    var $panel = $('#banggood-products');
+    // preserve alerts or other panels above the list (we replace list content only)
+    $panel.empty();
+    // insert pagination controls above list
+    var $controls = buildPaginationControls(total, totalPages, currentPage);
+    $panel.append($controls);
+    $panel.append('<div id="bg-products-list" />');
+    $panel.find('#bg-products-list').html(html);
+
+    // re-bind import buttons in new piece
+    bindImportButtons($panel);
+  }
+
+  function attachPaginationHandlers() {
+    var $panel = $('#banggood-products');
+    $panel.off('click', '#' + paginationContainerId + ' [data-action]');
+    $panel.on('click', '#' + paginationContainerId + ' [data-action]', function(e){
+      e.preventDefault();
+      var action = $(this).data('action');
+      var totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+      if (action === 'prev') {
+        renderPage(Math.max(1, currentPage - 1));
+      } else if (action === 'next') {
+        renderPage(Math.min(totalPages, currentPage + 1));
+      }
+    });
+
+    $panel.off('click', '#' + paginationContainerId + ' .pg-page');
+    $panel.on('click', '#' + paginationContainerId + ' .pg-page', function(e){
+      e.preventDefault();
+      var p = parseInt($(this).attr('data-page'), 10);
+      if (isNaN(p)) return;
+      renderPage(p);
+    });
+  }
+
+  function initPagination() {
+    var $panel = $('#banggood-products');
+    items = collectItemsFromContainer($panel);
+    // The server already renders newest first (fetched_at DESC). We keep order as-is but ensure newest on page 1.
+    renderPage(1);
+    attachPaginationHandlers();
+  }
+
+  // Poll the current page and refresh the persisted list container when changed.
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(function(){
+      // GET the current full page and extract #banggood-products
+      $.get(window.location.href, function(data){
+        try {
+          var $doc = $('<div>').html(data);
+          var newHtml = $doc.find('#banggood-products').html() || '';
+          var $currentPanel = $('#banggood-products');
+          var curHtml = $currentPanel.find('#bg-products-list').length ? $currentPanel.find('#bg-products-list').html() : $currentPanel.html();
+
+          // Compare trimmed strings to detect changes (status changes or new items)
+          if (newHtml && $.trim(newHtml) !== $.trim($doc.find('#banggood-products').html())) {
+            // If server returned something, parse rows from newHtml
+          }
+
+          // Extract rows from newHtml
+          var $tmp = $('<div>').html(newHtml);
+          var newItemsArr = [];
+          $tmp.find('.bg-compact-row').each(function(){
+            newItemsArr.push($(this).prop('outerHTML'));
+          });
+
+          // If arrays differ (simple string compare), update items and re-render current page
+          var changed = false;
+          if (newItemsArr.length !== items.length) changed = true;
+          else {
+            for (var i=0;i<newItemsArr.length;i++){
+              if (newItemsArr[i] !== items[i]) { changed = true; break; }
+            }
+          }
+
+          if (changed) {
+            items = newItemsArr;
+            // Keep user on page 1 to show newest first when new items inserted, else attempt to stay on same page
+            renderPage(1);
+            // small visual highlight for newly inserted top rows
+            $('#bg-products-list .bg-compact-row').slice(0,3).css('background','rgba(210,240,210,0.6)');
+            setTimeout(function(){ $('#bg-products-list .bg-compact-row').slice(0,3).css('background',''); }, 1200);
+            // update persisted count badge if present
+            $('#bg-persisted-count').text('(' + items.length + ')');
+          } else {
+            // Even if same items count, status inside some items might have changed.
+            // We'll do a gentle per-row compare and replace differing rows in current page DOM.
+            var $currentRows = $('#bg-products-list .bg-compact-row');
+            $tmp.find('.bg-compact-row').each(function(idx){
+              var newRow = $(this).prop('outerHTML');
+              var $curRow = $currentRows.eq(idx);
+              if ($curRow.length && $curRow.prop('outerHTML') !== newRow) {
+                $curRow.replaceWith(newRow);
+              }
+            });
+            bindImportButtons($('#banggood-products'));
+          }
+        } catch (ex) {
+          // swallow parsing errors
+          console && console.warn('Persisted products poll parse error', ex);
+        }
+      }).fail(function(){ /* ignore transient failures */ });
+    }, pollIntervalMs);
+  }
+
+  // Initialize pagination and live polling when the page loads or when persisted-products are first available.
+  $(function(){
+    // If the server pre-rendered list exists we initialize client pagination
+    if ($('#banggood-products').length) {
+      initPagination();
+      startPolling();
+    }
+
+    // Expose a manual refresh function for other code if needed
+    window.bgPersistedProducts = {
+      refreshNow: function(){
+        // fetch and apply immediately
+        $.get(window.location.href, function(data){
+          var $doc = $('<div>').html(data);
+          var newHtml = $doc.find('#banggood-products').html() || '';
+          var $tmp = $('<div>').html(newHtml);
+          var newItemsArr = [];
+          $tmp.find('.bg-compact-row').each(function(){ newItemsArr.push($(this).prop('outerHTML')); });
+          items = newItemsArr;
+          renderPage(1);
+          bindImportButtons($('#banggood-products'));
+        });
+      },
+      setPageSize: function(n){
+        var nn = parseInt(n,10);
+        if (!isNaN(nn) && nn > 0) {
+          pageSize = nn;
+          renderPage(1);
+        }
+      }
+    };
+  });
+})(jQuery);
 </script>
