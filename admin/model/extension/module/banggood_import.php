@@ -2990,6 +2990,27 @@ protected function apiRequestRawSimple($url) {
 
         foreach ($nodes as $img) {
             if (!$img instanceof DOMElement) continue;
+
+            // Ensure images in description are centered (inline, non-invasive: only appends if missing)
+            try {
+                $curStyle = (string)$img->getAttribute('style');
+                $needsCenter = (stripos($curStyle, 'margin-left') === false) && (stripos($curStyle, 'margin-right') === false) && (stripos($curStyle, 'margin:') === false);
+                $needsBlock = (stripos($curStyle, 'display') === false);
+                if ($needsCenter || $needsBlock) {
+                    $add = '';
+                    if ($needsBlock) $add .= 'display:block;';
+                    if ($needsCenter) $add .= 'margin-left:auto;margin-right:auto;';
+                    if ($add !== '') {
+                        $newStyle = trim($curStyle);
+                        if ($newStyle !== '' && substr($newStyle, -1) !== ';') $newStyle .= ';';
+                        $newStyle .= $add;
+                        $img->setAttribute('style', $newStyle);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // best-effort; keep original description intact on any DOM/style errors
+            }
+
             $src = trim((string)$img->getAttribute('src'));
             if ($src === '') continue;
 
