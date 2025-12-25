@@ -57,9 +57,9 @@
 
               {# Mirror state badge (clickable) #}
               {% if module_banggood_import_delete_missing %}
-                <span id="bg-mirror-badge" class="label label-success" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror ON</span>
+                <span id="bg-mirror-badge" class="label label-success" style="margin-left:8px;padding: 12px; cursor:pointer;" title="Click to toggle mirror">Mirror ON</span>
               {% else %}
-                <span id="bg-mirror-badge" class="label label-default" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror OFF</span>
+                <span id="bg-mirror-badge" class="label label-default" style="margin-left:8px;padding: 12px; cursor:pointer;" title="Click to toggle mirror">Mirror OFF</span>
               {% endif %}
             </div>
 
@@ -561,22 +561,8 @@ function initBanggoodCategoryTree() {
     }
   });
 
-  // Label click selects category visually (and loads products)
-  $tree.find('.cat-label, .bg-label').off('click').on('click', function(e) {
-    e.stopPropagation();
-    $tree.find('.cat-label, .bg-label').removeClass('selected');
-    $(this).addClass('selected');
-
-    // determine category id from various possible attributes
-    var cid = $(this).attr('data-cat-id') || $(this).closest('li').attr('data-bg-id') || $(this).closest('li').attr('data-id') || '';
-    if (!cid) {
-      var badge = $(this).find('.bg-id');
-      if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
-    }
-    if (cid) {
-      loadProducts(cid, 1);
-    }
-  });
+  // Label click disabled: do nothing (category click-to-load-products removed)
+  $tree.find('.cat-label, .bg-label').off('click');
 
   // copy id badges
   $tree.find('.bg-id').off('click').on('click', function(e){
