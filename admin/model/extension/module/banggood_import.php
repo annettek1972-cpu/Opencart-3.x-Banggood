@@ -2960,13 +2960,27 @@ protected function apiRequestRawSimple($url) {
         if (empty($html) || !is_string($html)) return $html;
         $bg_id = (string)$bg_id;
 
-        // Build a full base URL so <img src> in description always renders (use catalog URL when available).
+        // Build a full base URL so <img src> in description always renders.
+        // Prefer the store (catalog) URL from config; fall back to constants/server URL if needed.
         $base_url = '';
-        if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) $base_url = HTTPS_CATALOG;
-        elseif (defined('HTTP_CATALOG') && HTTP_CATALOG) $base_url = HTTP_CATALOG;
-        elseif (defined('HTTPS_SERVER') && HTTPS_SERVER) $base_url = HTTPS_SERVER;
-        elseif (defined('HTTP_SERVER') && HTTP_SERVER) $base_url = HTTP_SERVER;
-        if ($base_url !== '' && substr($base_url, -1) !== '/') $base_url .= '/';
+        try {
+            $cfg_ssl = $this->config->get('config_ssl');
+            $cfg_url = $this->config->get('config_url');
+            if (is_string($cfg_ssl) && $cfg_ssl !== '') $base_url = $cfg_ssl;
+            elseif (is_string($cfg_url) && $cfg_url !== '') $base_url = $cfg_url;
+        } catch (\Throwable $e) {}
+        if ($base_url === '') {
+            if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) $base_url = HTTPS_CATALOG;
+            elseif (defined('HTTP_CATALOG') && HTTP_CATALOG) $base_url = HTTP_CATALOG;
+            elseif (defined('HTTPS_SERVER') && HTTPS_SERVER) $base_url = HTTPS_SERVER;
+            elseif (defined('HTTP_SERVER') && HTTP_SERVER) $base_url = HTTP_SERVER;
+        }
+        $base_url = trim((string)$base_url);
+        if ($base_url !== '') {
+            // If we accidentally got an admin URL, strip trailing "admin/" segment.
+            $base_url = preg_replace('#/admin/?$#i', '/', $base_url);
+            if (substr($base_url, -1) !== '/') $base_url .= '/';
+        }
 
         libxml_use_internal_errors(true);
         $dom = new DOMDocument();
@@ -3016,13 +3030,8 @@ protected function apiRequestRawSimple($url) {
 
             // protocol-relative
             if (strpos($src, '//') === 0) $src = 'https:' . $src;
+            // Only handle remote http(s) images for downloading; keep other schemes intact.
             if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) continue;
-
-            // Only Banggood-hosted images
-            $host = '';
-            $p = @parse_url($src);
-            if (is_array($p) && !empty($p['host'])) $host = strtolower($p['host']);
-            if ($host === '' || strpos($host, 'banggood.com') === false) continue;
 
             $norm = preg_replace('/(\?.*)$/', '', $src);
             if (isset($seen[$norm])) {
@@ -3036,20 +3045,31 @@ protected function apiRequestRawSimple($url) {
 
             $data = null;
             try {
-                $curl_opts = array(
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_CONNECTTIMEOUT => 5,
-                    CURLOPT_TIMEOUT => 25,
-                    CURLOPT_SSL_VERIFYPEER => false,
-                    CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
-                );
-                $ch = curl_init($src);
-                curl_setopt_array($ch, $curl_opts);
-                $data = curl_exec($ch);
-                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                if ($data === false || strlen($data) < 200 || $code < 200 || $code >= 400) $data = null;
+                if (function_exists('curl_init')) {
+                    $curl_opts = array(
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                        CURLOPT_TIMEOUT => 25,
+                        CURLOPT_SSL_VERIFYPEER => false,
+                        CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
+                    );
+                    $ch = curl_init($src);
+                    curl_setopt_array($ch, $curl_opts);
+                    $data = curl_exec($ch);
+                    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
+                    if ($data === false || strlen($data) < 200 || $code < 200 || $code >= 400) $data = null;
+                } else {
+                    // Fallback: file_get_contents (some servers don't have curl enabled)
+                    $ctx = stream_context_create(array('http' => array(
+                        'timeout' => 25,
+                        'follow_location' => 1,
+                        'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
+                    )));
+                    $tmp = @file_get_contents($src, false, $ctx);
+                    if ($tmp !== false && strlen($tmp) >= 200) $data = $tmp;
+                }
             } catch (\Throwable $e) {
                 $data = null;
             }
