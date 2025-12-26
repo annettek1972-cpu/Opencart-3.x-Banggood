@@ -1182,14 +1182,56 @@ HTML;
             // Persist update IDs into bg_fetched_products so cron can import them later
             if ($persist && !empty($updates)) {
                 $toSave = array();
+                // Preserve existing name/img/meta_desc so the DB-backed list keeps the same layout as Fetch.
+                // UpdateList API may not include these fields, and we must not overwrite existing rows with blanks.
+                $existingById = array();
+                try {
+                    $tbl = $this->getFetchedProductsTableName();
+                    $this->ensureFetchedProductsTableExistsController();
+                    $ids = array();
+                    foreach ($updates as $u0) {
+                        if (!is_array($u0)) continue;
+                        $id0 = isset($u0['product_id']) ? (string)$u0['product_id'] : '';
+                        if ($id0 !== '' && preg_match('/^\d+$/', $id0)) $ids[] = (int)$id0;
+                    }
+                    $ids = array_values(array_unique($ids));
+                    if (!empty($ids)) {
+                        $qEx = $this->db->query(
+                            "SELECT `bg_product_id`, `name`, `img`, `meta_desc`, `cat_id`
+                             FROM `" . $tbl . "`
+                             WHERE `bg_product_id` IN (" . implode(',', $ids) . ")"
+                        );
+                        if ($qEx && $qEx->num_rows) {
+                            foreach ($qEx->rows as $r) {
+                                $bid = isset($r['bg_product_id']) ? (string)$r['bg_product_id'] : '';
+                                if ($bid === '') continue;
+                                $existingById[$bid] = $r;
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    $existingById = array();
+                }
+
                 foreach ($updates as $u) {
                     $id = isset($u['product_id']) ? (string)$u['product_id'] : '';
                     if ($id === '') continue;
                     $state = isset($u['state']) ? (int)$u['state'] : 0;
                     $modify = isset($u['modify_date']) ? (string)$u['modify_date'] : '';
+                    $ex = isset($existingById[$id]) ? $existingById[$id] : array();
+                    $keepName = isset($ex['name']) ? (string)$ex['name'] : '';
+                    $keepImg = isset($ex['img']) ? (string)$ex['img'] : '';
+                    $keepMeta = isset($ex['meta_desc']) ? (string)$ex['meta_desc'] : '';
+                    $keepCat = isset($ex['cat_id']) ? (string)$ex['cat_id'] : '';
+
                     $toSave[] = array(
                         'product_id' => $id,
-                        'meta_desc' => 'UpdateList: ' . $modify . ' state=' . $state,
+                        // Keep the same display fields as the Fetch list (name/img/meta_desc),
+                        // but append the UpdateList marker so you can still see it was queued as an update.
+                        'product_name' => $keepName,
+                        'img' => $keepImg,
+                        'cat_id' => $keepCat,
+                        'meta_desc' => trim($keepMeta . ($keepMeta !== '' ? "\n" : '') . 'UpdateList: ' . $modify . ' state=' . $state),
                         'modify_date' => $modify,
                         'state' => $state
                     );
@@ -1200,6 +1242,26 @@ HTML;
                 } catch (\Throwable $e) {
                     // non-fatal
                     $persisted = 0;
+                }
+
+                // Process/import any queued pending/updated items immediately (same behavior expectation as Fetch).
+                try {
+                    foreach ($toSave as $ts) {
+                        $pid2 = isset($ts['product_id']) ? (string)$ts['product_id'] : '';
+                        if ($pid2 === '') continue;
+                        try {
+                            $this->model_extension_module_banggood_import->importProductById($pid2);
+                            if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
+                                $this->model_extension_module_banggood_import->markFetchedProductImported($pid2);
+                            }
+                        } catch (\Throwable $ie) {
+                            if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
+                                $this->model_extension_module_banggood_import->markFetchedProductError($pid2, $ie->getMessage());
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // non-fatal
                 }
             }
 
