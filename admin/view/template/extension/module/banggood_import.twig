@@ -1090,37 +1090,73 @@ $(document).ready(function() {
 
   function refreshPersistedQueueOnce() {
     if (bgQueueRefreshInFlight) return;
-    if (bgProductsMode !== 'persisted') return;
-    if (!$('#banggood-products').length) return;
+    var $p = $('#banggood-products');
+    if (!$p.length) return;
+
+    // Live-update the queue view whenever it's being shown (even if some button handler forgot to set mode).
+    // Do NOT interfere with category/updates views.
+    var showingQueue = (bgProductsMode === 'persisted') || ($p.find('.bg-fetched-list').length > 0) || ($p.find('.bg-compact-row').length > 0);
+    if (!showingQueue) return;
 
     bgQueueRefreshInFlight = true;
-    $.ajax({
-      url: getFetchedProductsListPagedUrl,
-      type: 'post',
-      dataType: 'json',
-      data: { limit: bgQueueLimit, page: bgQueuePage },
-      success: function(json) {
-        if (!json || json.error) return;
-        if (typeof json.total_count !== 'undefined') {
-          $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
-        }
-        if (typeof json.page !== 'undefined' && typeof json.page_total !== 'undefined') {
-          // server may clamp page; keep client in sync
-          bgQueuePage = parseInt(json.page, 10) || bgQueuePage;
-          syncQueuePagerUi(json.page, json.page_total);
-        }
-        if (typeof json.html === 'string') {
-          // Avoid DOM churn if nothing changed
-          if (lastQueueHtml !== json.html) {
-            lastQueueHtml = json.html;
-            $('#banggood-products').html(json.html);
+    var requestPaged = function() {
+      $.ajax({
+        url: getFetchedProductsListPagedUrl,
+        type: 'post',
+        dataType: 'json',
+        data: { limit: bgQueueLimit, page: bgQueuePage },
+        success: function(json) {
+          if (!json || json.error) { requestLegacy(); return; }
+          // ensure mode stays consistent with what is shown
+          bgProductsMode = 'persisted';
+          if (typeof json.total_count !== 'undefined') {
+            $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
           }
+          if (typeof json.page !== 'undefined' && typeof json.page_total !== 'undefined') {
+            // server may clamp page; keep client in sync
+            bgQueuePage = parseInt(json.page, 10) || bgQueuePage;
+            syncQueuePagerUi(json.page, json.page_total);
+          }
+          if (typeof json.html === 'string') {
+            // Avoid DOM churn if nothing changed
+            if (lastQueueHtml !== json.html) {
+              lastQueueHtml = json.html;
+              $p.html(json.html);
+            }
+          }
+        },
+        complete: function() {
+          bgQueueRefreshInFlight = false;
         }
-      },
-      complete: function() {
-        bgQueueRefreshInFlight = false;
-      }
-    });
+      });
+    };
+
+    // Fallback for older deployments: use non-paged endpoint if the paged route isn't available.
+    var requestLegacy = function() {
+      $.ajax({
+        url: getFetchedProductsListUrl,
+        type: 'post',
+        dataType: 'json',
+        data: { limit: Math.max(50, bgQueueLimit) },
+        success: function(json) {
+          if (!json || json.error) return;
+          bgProductsMode = 'persisted';
+          if (typeof json.total_count !== 'undefined') $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
+          else if (typeof json.recent_count !== 'undefined') $('#bg-persisted-count').text('(' + (json.recent_count || 0) + ')');
+          if (typeof json.html === 'string') {
+            if (lastQueueHtml !== json.html) {
+              lastQueueHtml = json.html;
+              $p.html(json.html);
+            }
+          }
+        },
+        complete: function() {
+          bgQueueRefreshInFlight = false;
+        }
+      });
+    };
+
+    requestPaged();
   }
 
   // Pager controls (AJAX)
