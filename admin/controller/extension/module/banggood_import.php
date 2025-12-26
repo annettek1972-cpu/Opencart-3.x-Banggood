@@ -32,10 +32,21 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
         else $selectExtra .= ", NULL AS updated_at";
 
+        $lang_id = (int)$this->config->get('config_language_id');
+        if ($lang_id <= 0) $lang_id = 1;
+
+        // Join to OpenCart product tables so rows missing name/img can still render like imported rows.
         $qr = $this->db->query(
-            "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
-             FROM `" . $tbl . "`
-             ORDER BY `fetched_at` DESC, `id` DESC
+            "SELECT q.`bg_product_id`, q.`cat_id`, q.`name`, q.`img`, q.`meta_desc`, q.`fetched_at`, q.`status`, q.`attempts`" . $selectExtra . ",
+                    p.`image` AS oc_image,
+                    pd.`name`  AS oc_name
+             FROM `" . $tbl . "` q
+             LEFT JOIN `" . DB_PREFIX . "product` p
+               ON (p.`model` = CONCAT('BBC-', q.`bg_product_id`) OR p.`model` = CONCAT('BG-', q.`bg_product_id`))
+             LEFT JOIN `" . DB_PREFIX . "product_description` pd
+               ON (pd.`product_id` = p.`product_id` AND pd.`language_id` = " . (int)$lang_id . ")
+             ORDER BY (CASE WHEN LOWER(q.`status`) = 'imported' THEN 0 ELSE 1 END) ASC,
+                      q.`fetched_at` DESC, q.`id` DESC
              LIMIT " . (int)$limit
         );
         $recent = $qr->rows;
@@ -51,7 +62,26 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
 
         foreach ($recent as $row) {
             $img  = isset($row['img']) ? $row['img'] : '';
-            $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
+            $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : '';
+            if ($name === '' && !empty($row['oc_name'])) $name = (string)$row['oc_name'];
+            if ($name === '') $name = (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
+
+            // If img is missing, use the imported OpenCart product image (full URL), so UPDATED rows display like IMPORTED.
+            if (($img === '' || $img === null) && !empty($row['oc_image'])) {
+                $base = '';
+                try {
+                    $cfg_ssl = $this->config->get('config_ssl');
+                    $cfg_url = $this->config->get('config_url');
+                    if (is_string($cfg_ssl) && $cfg_ssl !== '') $base = $cfg_ssl;
+                    elseif (is_string($cfg_url) && $cfg_url !== '') $base = $cfg_url;
+                } catch (\Throwable $e) {}
+                $base = trim((string)$base);
+                if ($base !== '') {
+                    $base = preg_replace('#/admin/?$#i', '/', $base);
+                    if (substr($base, -1) !== '/') $base .= '/';
+                }
+                $img = $base . 'image/' . ltrim((string)$row['oc_image'], '/');
+            }
             $meta = isset($row['meta_desc']) ? $row['meta_desc'] : '';
             $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
             $cat  = isset($row['cat_id']) ? $row['cat_id'] : '';
@@ -1385,10 +1415,20 @@ HTML;
             if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
             else $selectExtra .= ", NULL AS updated_at";
 
+            $lang_id = (int)$this->config->get('config_language_id');
+            if ($lang_id <= 0) $lang_id = 1;
+
             $qr = $this->db->query(
-                "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
-                 FROM `" . $tbl . "`
-                 ORDER BY `fetched_at` DESC, `id` DESC
+                "SELECT q.`bg_product_id`, q.`cat_id`, q.`name`, q.`img`, q.`meta_desc`, q.`fetched_at`, q.`status`, q.`attempts`" . $selectExtra . ",
+                        p.`image` AS oc_image,
+                        pd.`name`  AS oc_name
+                 FROM `" . $tbl . "` q
+                 LEFT JOIN `" . DB_PREFIX . "product` p
+                   ON (p.`model` = CONCAT('BBC-', q.`bg_product_id`) OR p.`model` = CONCAT('BG-', q.`bg_product_id`))
+                 LEFT JOIN `" . DB_PREFIX . "product_description` pd
+                   ON (pd.`product_id` = p.`product_id` AND pd.`language_id` = " . (int)$lang_id . ")
+                 ORDER BY (CASE WHEN LOWER(q.`status`) = 'imported' THEN 0 ELSE 1 END) ASC,
+                          q.`fetched_at` DESC, q.`id` DESC
                  LIMIT " . (int)$offset . "," . (int)$limit
             );
             $rows = $qr->rows;
@@ -1405,7 +1445,25 @@ HTML;
 
                 foreach ($rows as $row) {
                     $img  = isset($row['img']) ? $row['img'] : '';
-                    $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
+                    $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : '';
+                    if ($name === '' && !empty($row['oc_name'])) $name = (string)$row['oc_name'];
+                    if ($name === '') $name = (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
+
+                    if (($img === '' || $img === null) && !empty($row['oc_image'])) {
+                        $base = '';
+                        try {
+                            $cfg_ssl = $this->config->get('config_ssl');
+                            $cfg_url = $this->config->get('config_url');
+                            if (is_string($cfg_ssl) && $cfg_ssl !== '') $base = $cfg_ssl;
+                            elseif (is_string($cfg_url) && $cfg_url !== '') $base = $cfg_url;
+                        } catch (\Throwable $e) {}
+                        $base = trim((string)$base);
+                        if ($base !== '') {
+                            $base = preg_replace('#/admin/?$#i', '/', $base);
+                            if (substr($base, -1) !== '/') $base .= '/';
+                        }
+                        $img = $base . 'image/' . ltrim((string)$row['oc_image'], '/');
+                    }
                     $meta = isset($row['meta_desc']) ? $row['meta_desc'] : '';
                     $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                     $cat  = isset($row['cat_id']) ? $row['cat_id'] : '';
