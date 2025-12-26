@@ -929,7 +929,9 @@ $('#btn-fetch-updates').on('click', function(e){
   e.preventDefault();
   var $btn = $(this);
   var $panel = $('#banggood-products');
-  bgProductsMode = 'updates';
+  // IMPORTANT: Fetch Updates should show the same DB-backed queue list as Fetch (only statuses differ).
+  // So keep the panel in "persisted" mode and refresh from oc_bg_fetched_products after persisting updates.
+  bgProductsMode = 'persisted';
 
   var minutes = parseInt($('#bg-update-minutes').val(), 10);
   if (!minutes || minutes < 1) minutes = 30;
@@ -942,19 +944,75 @@ $('#btn-fetch-updates').on('click', function(e){
     url: fetchUpdatesUrl,
     type: 'post',
     dataType: 'json',
-    data: { minutes: minutes, page: 1 },
+    data: { minutes: minutes, page: 1, persist: 1 },
     success: function(json) {
       if (json && json.error) {
         $panel.prepend('<div class="alert alert-danger">'+ json.error +'</div>');
         return;
       }
-      if (json && json.html) {
-        // replace panel with the updates view
-        $panel.html(json.html);
-      } else {
-        $panel.html('<div class="text-muted">No updates returned.</div>');
-      }
-      bindImportButtons($panel);
+
+      // After persisting "updated" rows, refresh the queue list from DB (same view as Fetch).
+      bgProductsMode = 'persisted';
+      bgQueuePage = 1;
+
+      $.ajax({
+        url: getFetchedProductsListPagedUrl,
+        type: 'post',
+        dataType: 'json',
+        data: { limit: bgQueueLimit, page: bgQueuePage },
+        success: function(j2) {
+          if (!j2 || j2.error) return;
+          if (typeof j2.total_count !== 'undefined') {
+            $('#bg-persisted-count').text('(' + (j2.total_count || 0) + ')');
+          }
+          if (typeof j2.page !== 'undefined') bgQueuePage = parseInt(j2.page, 10) || bgQueuePage;
+          if (typeof j2.html === 'string') $panel.html(j2.html);
+
+          // Auto-import any visible items still pending (or updated-but-not-processed yet) in the list.
+          try {
+            var ids = [];
+            $panel.find('.bg-compact-row').each(function(){
+              var $row = $(this);
+              var badgeTxt = ($row.find('span').last().text() || '').trim().toUpperCase();
+              if (badgeTxt !== 'PENDING' && badgeTxt !== 'UPDATED') return;
+              var small = $row.find('small').first().text() || '';
+              var m = small.match(/#\s*([0-9]+)/);
+              if (m && m[1]) ids.push(String(m[1]));
+            });
+            // de-dupe
+            ids = ids.filter(function(v, i, a){ return a.indexOf(v) === i; });
+
+            var i = 0;
+            var importNext = function() {
+              if (i >= ids.length) {
+                // refresh again so statuses reflect imports
+                $.ajax({
+                  url: getFetchedProductsListPagedUrl,
+                  type: 'post',
+                  dataType: 'json',
+                  data: { limit: bgQueueLimit, page: bgQueuePage },
+                  success: function(j3) {
+                    if (j3 && !j3.error && typeof j3.html === 'string') $panel.html(j3.html);
+                    if (j3 && typeof j3.total_count !== 'undefined') $('#bg-persisted-count').text('(' + (j3.total_count || 0) + ')');
+                  }
+                });
+                return;
+              }
+              $.ajax({
+                url: importProductByIdUrl,
+                type: 'post',
+                dataType: 'json',
+                data: { product_id: ids[i] },
+                complete: function() {
+                  i++;
+                  importNext();
+                }
+              });
+            };
+            if (ids.length) importNext();
+          } catch (ex) {}
+        }
+      });
     },
     error: function(xhr, status, err) {
       $panel.prepend('<div class="alert alert-danger">AJAX error: '+err+'</div>');
