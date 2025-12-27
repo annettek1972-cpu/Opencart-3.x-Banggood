@@ -1003,205 +1003,113 @@ $(document).ready(function() {
 });
 
 /*
-  ADDITION: Client-side AJAX pagination + live refresh for the persisted fetched-products list.
+  Live refresh for the persisted fetched-products list (DB-backed).
 
-  - Implements client-side pagination of rows with class `.bg-compact-row`.
-  - Polls the current page periodically and replaces the persisted-products container when changes are detected.
-  - New items (or status changes) are injected so admin sees "newest first" ordering preserved.
-  - Does not change any server endpoints, only does AJAX GET of the current page and extracts #banggood-products HTML.
+  - Keeps the server-rendered list intact (no client-side pagination).
+  - Live updates the product rows as the DB changes.
+  - Live updates the status badge (pending -> imported, etc).
+  - Twig-only JS change: polls the current page HTML and extracts #banggood-products.
 */
 
 (function($){
-  var pageSize = 10;                 // default items per page
-  var currentPage = 1;
-  var items = [];                    // array of HTML strings for .bg-compact-row
-  var pollIntervalMs = 8000;         // poll every 8 seconds
+  var pollIntervalMs = 4000;
   var pollTimer = null;
-  var paginationContainerId = 'bg-products-pagination-controls';
+  var lastFingerprint = null;
+  var inFlight = false;
 
-  function collectItemsFromContainer($container) {
-    var arr = [];
-    $container.find('.bg-compact-row').each(function(){
-      arr.push($(this).prop('outerHTML'));
-    });
-    return arr;
+  function isShowingPersistedList($panel) {
+    // Only auto-refresh the DB-backed fetched-products list.
+    // Do not overwrite category product list / updates view that also render into #banggood-products.
+    //
+    // Persisted list signature:
+    // - has `.bg-fetched-list` wrapper, OR
+    // - shows the empty-state text ("No fetched products yet..."), OR
+    // - contains the phrase "persisted products" in its header.
+    if ($panel.find('.bg-fetched-list').length > 0) return true;
+    var t = ($panel.text() || '').toLowerCase();
+    if (t.indexOf('no fetched products yet') !== -1) return true;
+    if (t.indexOf('persisted products') !== -1) return true;
+    return false;
   }
 
-  function buildPaginationControls(totalCount, pageCount, current) {
-    var $controls = $('<div id="' + paginationContainerId + '"></div>');
-    var $left = $('<div class="pg-actions"></div>');
-    var $right = $('<div class="pg-pages"></div>');
-    var $info = $('<div class="pg-info text-muted"></div>').text('Showing page ' + current + ' of ' + pageCount + ' (' + totalCount + ' items)');
-    var $prev = $('<button type="button" class="btn btn-default btn-sm" data-action="prev">Prev</button>');
-    var $next = $('<button type="button" class="btn btn-default btn-sm" data-action="next">Next</button>');
-    $left.append($prev).append($next);
-    $left.append($info);
+  function fingerprintFromInnerHtml(innerHtml) {
+    var $tmp = $('<div>').html(innerHtml || '');
+    var parts = [];
 
-    // page numbers (limited window)
-    var maxButtons = 7;
-    var start = Math.max(1, current - 3);
-    var end = Math.min(pageCount, start + maxButtons - 1);
-    if (end - start + 1 < maxButtons) start = Math.max(1, end - maxButtons + 1);
+    $tmp.find('.bg-compact-row').each(function(){
+      parts.push($(this).prop('outerHTML'));
+    });
 
-    for (var i = start; i <= end; i++) {
-      var $p = $('<span class="pg-page"></span>').text(i).attr('data-page', i);
-      if (i === current) $p.addClass('active');
-      $right.append($p);
+    if (parts.length === 0) {
+      parts.push($.trim($tmp.text() || ''));
     }
 
-    $controls.append($left).append($right);
-    return $controls;
+    return parts.join('||');
   }
 
-  function renderPage(page) {
-    currentPage = page || 1;
-    if (currentPage < 1) currentPage = 1;
-    var total = items.length;
-    var totalPages = Math.max(1, Math.ceil(total / pageSize));
-    if (currentPage > totalPages) currentPage = totalPages;
-
-    // slice items (newest first assumed already: items[0] newest)
-    var start = (currentPage - 1) * pageSize;
-    var end = Math.min(total, start + pageSize);
-    var html = '';
-    for (var i = start; i < end; i++) html += items[i];
-
+  function applyPersistedInnerHtml(innerHtml, fingerprint) {
     var $panel = $('#banggood-products');
-    // preserve alerts or other panels above the list (we replace list content only)
-    $panel.empty();
-    // insert pagination controls above list
-    var $controls = buildPaginationControls(total, totalPages, currentPage);
-    $panel.append($controls);
-    $panel.append('<div id="bg-products-list" />');
-    $panel.find('#bg-products-list').html(html);
+    if (!$panel.length) return;
 
-    // re-bind import buttons in new piece
+    // Preserve scroll position within the server-rendered scroller
+    var $scroll = $panel.find('.bg-fetched-list');
+    var scrollTop = $scroll.length ? $scroll.scrollTop() : 0;
+
+    $panel.html(innerHtml);
+
+    var $scroll2 = $panel.find('.bg-fetched-list');
+    if ($scroll2.length) $scroll2.scrollTop(scrollTop);
+
+    // Update the visible count badge in the header, if present
+    $('#bg-persisted-count').text('(' + $panel.find('.bg-compact-row').length + ')');
+
     bindImportButtons($panel);
+    lastFingerprint = fingerprint;
   }
 
-  function attachPaginationHandlers() {
+  function refreshPersistedList(force) {
     var $panel = $('#banggood-products');
-    $panel.off('click', '#' + paginationContainerId + ' [data-action]');
-    $panel.on('click', '#' + paginationContainerId + ' [data-action]', function(e){
-      e.preventDefault();
-      var action = $(this).data('action');
-      var totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-      if (action === 'prev') {
-        renderPage(Math.max(1, currentPage - 1));
-      } else if (action === 'next') {
-        renderPage(Math.min(totalPages, currentPage + 1));
+    if (!$panel.length) return;
+    if (!isShowingPersistedList($panel)) return;
+    if (inFlight) return;
+
+    inFlight = true;
+    $.get(window.location.href, function(data){
+      try {
+        var $doc = $('<div>').html(data);
+        var newInnerHtml = $doc.find('#banggood-products').html() || '';
+        var fp = fingerprintFromInnerHtml(newInnerHtml);
+
+        if (force || lastFingerprint === null || fp !== lastFingerprint) {
+          applyPersistedInnerHtml(newInnerHtml, fp);
+        }
+      } catch (ex) {
+        console && console.warn && console.warn('Persisted products refresh parse error', ex);
       }
-    });
-
-    $panel.off('click', '#' + paginationContainerId + ' .pg-page');
-    $panel.on('click', '#' + paginationContainerId + ' .pg-page', function(e){
-      e.preventDefault();
-      var p = parseInt($(this).attr('data-page'), 10);
-      if (isNaN(p)) return;
-      renderPage(p);
+    }).always(function(){
+      inFlight = false;
     });
   }
 
-  function initPagination() {
-    var $panel = $('#banggood-products');
-    items = collectItemsFromContainer($panel);
-    // The server already renders newest first (fetched_at DESC). We keep order as-is but ensure newest on page 1.
-    renderPage(1);
-    attachPaginationHandlers();
-  }
-
-  // Poll the current page and refresh the persisted list container when changed.
   function startPolling() {
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(function(){
-      // GET the current full page and extract #banggood-products
-      $.get(window.location.href, function(data){
-        try {
-          var $doc = $('<div>').html(data);
-          var newHtml = $doc.find('#banggood-products').html() || '';
-          var $currentPanel = $('#banggood-products');
-          var curHtml = $currentPanel.find('#bg-products-list').length ? $currentPanel.find('#bg-products-list').html() : $currentPanel.html();
-
-          // Compare trimmed strings to detect changes (status changes or new items)
-          if (newHtml && $.trim(newHtml) !== $.trim($doc.find('#banggood-products').html())) {
-            // If server returned something, parse rows from newHtml
-          }
-
-          // Extract rows from newHtml
-          var $tmp = $('<div>').html(newHtml);
-          var newItemsArr = [];
-          $tmp.find('.bg-compact-row').each(function(){
-            newItemsArr.push($(this).prop('outerHTML'));
-          });
-
-          // If arrays differ (simple string compare), update items and re-render current page
-          var changed = false;
-          if (newItemsArr.length !== items.length) changed = true;
-          else {
-            for (var i=0;i<newItemsArr.length;i++){
-              if (newItemsArr[i] !== items[i]) { changed = true; break; }
-            }
-          }
-
-          if (changed) {
-            items = newItemsArr;
-            // Keep user on page 1 to show newest first when new items inserted, else attempt to stay on same page
-            renderPage(1);
-            // small visual highlight for newly inserted top rows
-            $('#bg-products-list .bg-compact-row').slice(0,3).css('background','rgba(210,240,210,0.6)');
-            setTimeout(function(){ $('#bg-products-list .bg-compact-row').slice(0,3).css('background',''); }, 1200);
-            // update persisted count badge if present
-            $('#bg-persisted-count').text('(' + items.length + ')');
-          } else {
-            // Even if same items count, status inside some items might have changed.
-            // We'll do a gentle per-row compare and replace differing rows in current page DOM.
-            var $currentRows = $('#bg-products-list .bg-compact-row');
-            $tmp.find('.bg-compact-row').each(function(idx){
-              var newRow = $(this).prop('outerHTML');
-              var $curRow = $currentRows.eq(idx);
-              if ($curRow.length && $curRow.prop('outerHTML') !== newRow) {
-                $curRow.replaceWith(newRow);
-              }
-            });
-            bindImportButtons($('#banggood-products'));
-          }
-        } catch (ex) {
-          // swallow parsing errors
-          console && console.warn('Persisted products poll parse error', ex);
-        }
-      }).fail(function(){ /* ignore transient failures */ });
-    }, pollIntervalMs);
+    try {
+      lastFingerprint = fingerprintFromInnerHtml($('#banggood-products').html() || '');
+    } catch (ex) {}
+    pollTimer = setInterval(function(){ refreshPersistedList(false); }, pollIntervalMs);
   }
 
   // Initialize pagination and live polling when the page loads or when persisted-products are first available.
   $(function(){
-    // If the server pre-rendered list exists we initialize client pagination
     if ($('#banggood-products').length) {
-      initPagination();
+      refreshPersistedList(true);
       startPolling();
     }
 
     // Expose a manual refresh function for other code if needed
     window.bgPersistedProducts = {
       refreshNow: function(){
-        // fetch and apply immediately
-        $.get(window.location.href, function(data){
-          var $doc = $('<div>').html(data);
-          var newHtml = $doc.find('#banggood-products').html() || '';
-          var $tmp = $('<div>').html(newHtml);
-          var newItemsArr = [];
-          $tmp.find('.bg-compact-row').each(function(){ newItemsArr.push($(this).prop('outerHTML')); });
-          items = newItemsArr;
-          renderPage(1);
-          bindImportButtons($('#banggood-products'));
-        });
-      },
-      setPageSize: function(n){
-        var nn = parseInt(n,10);
-        if (!isNaN(nn) && nn > 0) {
-          pageSize = nn;
-          renderPage(1);
-        }
+        refreshPersistedList(true);
       }
     };
   });
