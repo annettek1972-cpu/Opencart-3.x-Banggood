@@ -33,7 +33,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         else $selectExtra .= ", NULL AS updated_at";
 
         $qr = $this->db->query(
-            "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
+            "SELECT `id`, `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
              FROM `" . $tbl . "`
              ORDER BY (`status` = 'pending') DESC, `fetched_at` DESC, `id` DESC
              LIMIT " . (int)$limit
@@ -50,12 +50,14 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $rp_html .= '<div class="bg-fetched-list" style="max-height:520px;overflow:auto;">';
 
         foreach ($recent as $row) {
+            $row_id = isset($row['id']) ? (int)$row['id'] : 0;
             $img  = isset($row['img']) ? $row['img'] : '';
             $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
             $meta = isset($row['meta_desc']) ? $row['meta_desc'] : '';
             $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
             $cat  = isset($row['cat_id']) ? $row['cat_id'] : '';
             $fetched_at = isset($row['fetched_at']) && $row['fetched_at'] ? date('Y-m-d', strtotime($row['fetched_at'])) : '';
+            $fetched_at_ts = isset($row['fetched_at']) && $row['fetched_at'] ? (int)strtotime($row['fetched_at']) : 0;
             $status = isset($row['status']) ? strtolower((string)$row['status']) : '';
             $statusLabel = $status !== '' ? strtoupper($status) : '';
             $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
@@ -75,7 +77,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             elseif ($status === 'processing') $badgeBg = $color_blue;
             elseif ($status === 'pending') $badgeBg = $color_gray;
 
-            $rp_html .= '<div class="bg-compact-row" style="display:flex;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;white-space:nowrap;">';
+            $rp_html .= '<div class="bg-compact-row" data-bg-product-id="' . htmlspecialchars($bgid, ENT_QUOTES, 'UTF-8') . '" data-row-id="' . (int)$row_id . '" data-fetched-at-ts="' . (int)$fetched_at_ts . '" style="display:flex;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;white-space:nowrap;">';
             $rp_html .= '<div style="flex:0 0 36px;margin-right:8px;">';
             $rp_html .= '<img src="' . htmlspecialchars($img ?: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', ENT_QUOTES, 'UTF-8') . '" alt="" style="width:36px;height:36px;object-fit:cover;border:1px solid #eaeaea;border-radius:3px"/>';
             $rp_html .= '</div>';
@@ -85,7 +87,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             $rp_html .= '<span style="font-weight:600;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '</span>';
             $rp_html .= '<small style="color:#777;margin-left:8px;flex:0 0 auto;white-space:nowrap;">#' . htmlspecialchars($bgid, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($cat, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($fetched_at, ENT_QUOTES, 'UTF-8') . '</small>';
             if ($statusLabel !== '') {
-                $rp_html .= '<span style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:' . htmlspecialchars($badgeBg, ENT_QUOTES, 'UTF-8') . ';flex:0 0 auto;">' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</span>';
+                $rp_html .= '<span class="bg-status-badge" data-status="' . htmlspecialchars($status, ENT_QUOTES, 'UTF-8') . '" style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:' . htmlspecialchars($badgeBg, ENT_QUOTES, 'UTF-8') . ';flex:0 0 auto;">' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</span>';
             }
             $rp_html .= '</div>';
             // Second line: show imported/updated timestamps (null allowed) + attempts
@@ -432,6 +434,13 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             'user_token=' . $this->session->data['user_token'],
             true
         );
+
+        // Add live status updater (keeps list static; updates badges in-place)
+        try {
+            $this->document->addScript('view/javascript/banggood_import_live_status.js?v=' . rawurlencode(self::BG_IMPORT_BUILD));
+        } catch (\Throwable $e) {
+            // non-fatal
+        }
 
         $data['header'] = $this->load->controller('common/header');
         $data['column_left'] = $this->load->controller('common/column_left');
@@ -1324,7 +1333,7 @@ HTML;
             else $selectExtra .= ", NULL AS updated_at";
 
             $qr = $this->db->query(
-                "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
+                "SELECT `id`, `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
                  FROM `" . $tbl . "`
                  ORDER BY (`status` = 'pending') DESC, `fetched_at` DESC, `id` DESC
                  LIMIT " . (int)$offset . "," . (int)$limit
@@ -1342,12 +1351,14 @@ HTML;
                 $html .= '<div class="bg-fetched-list" style="max-height:520px;overflow:auto;">';
 
                 foreach ($rows as $row) {
+                    $row_id = isset($row['id']) ? (int)$row['id'] : 0;
                     $img  = isset($row['img']) ? $row['img'] : '';
                     $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
                     $meta = isset($row['meta_desc']) ? $row['meta_desc'] : '';
                     $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                     $cat  = isset($row['cat_id']) ? $row['cat_id'] : '';
                     $fetched_at = isset($row['fetched_at']) && $row['fetched_at'] ? date('Y-m-d', strtotime($row['fetched_at'])) : '';
+                    $fetched_at_ts = isset($row['fetched_at']) && $row['fetched_at'] ? (int)strtotime($row['fetched_at']) : 0;
                     $status = isset($row['status']) ? strtolower((string)$row['status']) : '';
                     $statusLabel = $status !== '' ? strtoupper($status) : '';
                     $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
@@ -1367,7 +1378,7 @@ HTML;
                     elseif ($status === 'processing') $badgeBg = $color_blue;
                     elseif ($status === 'pending') $badgeBg = $color_gray;
 
-                    $html .= '<div class="bg-compact-row" style="display:flex;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;white-space:nowrap;">';
+                    $html .= '<div class="bg-compact-row" data-bg-product-id="' . htmlspecialchars($bgid, ENT_QUOTES, 'UTF-8') . '" data-row-id="' . (int)$row_id . '" data-fetched-at-ts="' . (int)$fetched_at_ts . '" style="display:flex;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;white-space:nowrap;">';
                     $html .= '<div style="flex:0 0 36px;margin-right:8px;">';
                     $html .= '<img src="' . htmlspecialchars($img ?: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', ENT_QUOTES, 'UTF-8') . '" alt="" style="width:36px;height:36px;object-fit:cover;border:1px solid #eaeaea;border-radius:3px"/>';
                     $html .= '</div>';
@@ -1377,7 +1388,7 @@ HTML;
                     $html .= '<span style="font-weight:600;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '</span>';
                     $html .= '<small style="color:#777;margin-left:8px;flex:0 0 auto;white-space:nowrap;">#' . htmlspecialchars($bgid, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($cat, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($fetched_at, ENT_QUOTES, 'UTF-8') . '</small>';
                     if ($statusLabel !== '') {
-                        $html .= '<span style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:' . htmlspecialchars($badgeBg, ENT_QUOTES, 'UTF-8') . ';flex:0 0 auto;">' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</span>';
+                        $html .= '<span class="bg-status-badge" data-status="' . htmlspecialchars($status, ENT_QUOTES, 'UTF-8') . '" style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:' . htmlspecialchars($badgeBg, ENT_QUOTES, 'UTF-8') . ';flex:0 0 auto;">' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</span>';
                     }
                     $html .= '</div>';
 
@@ -1404,6 +1415,126 @@ HTML;
             $json['total_count'] = (int)$total_count;
         } catch (\Throwable $e) {
             $json['error'] = 'getFetchedProductsListPaged failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: getFetchedProductsStatuses
+     *
+     * Returns statuses for a set of bg_product_id values so the admin UI can update
+     * the status badges in-place (without re-rendering the list).
+     *
+     * Expects POST:
+     * - product_ids: array OR comma-separated string
+     */
+    public function getFetchedProductsStatuses() {
+        $this->load->language('extension/module/banggood_import');
+        $this->response->addHeader('Content-Type: application/json');
+
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $tbl = $this->getFetchedProductsTableName();
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+            if (!$q->num_rows) {
+                $json['error'] = 'Fetched-products table not found: ' . $tbl;
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $ids = array();
+            if (isset($this->request->post['product_ids'])) {
+                $raw = $this->request->post['product_ids'];
+                if (is_array($raw)) {
+                    $ids = $raw;
+                } else {
+                    $raw = trim((string)$raw);
+                    if ($raw !== '') $ids = preg_split('/\s*,\s*/', $raw);
+                }
+            }
+
+            // Normalize & limit
+            $norm = array();
+            foreach ($ids as $id) {
+                $id = trim((string)$id);
+                if ($id === '') continue;
+                if (strlen($id) > 64) $id = substr($id, 0, 64);
+                $norm[$id] = true;
+                if (count($norm) >= 200) break;
+            }
+            $ids = array_keys($norm);
+
+            if (!$ids) {
+                $json['success'] = true;
+                $json['statuses'] = array();
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
+            $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+            $selectExtra = '';
+            if ($importedCol) $selectExtra .= ", `" . $importedCol . "` AS imported_at";
+            else $selectExtra .= ", NULL AS imported_at";
+            if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
+            else $selectExtra .= ", NULL AS updated_at";
+
+            $in = array();
+            foreach ($ids as $id) {
+                $in[] = "'" . $this->db->escape($id) . "'";
+            }
+
+            $qr = $this->db->query(
+                "SELECT `bg_product_id`, `status`, `attempts`" . $selectExtra . "
+                 FROM `" . $tbl . "`
+                 WHERE `bg_product_id` IN (" . implode(',', $in) . ")"
+            );
+
+            $statuses = array();
+            foreach ($qr->rows as $row) {
+                $bgid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
+                if ($bgid === '') continue;
+
+                $status = isset($row['status']) ? strtolower((string)$row['status']) : '';
+                $statusLabel = $status !== '' ? strtoupper($status) : '';
+                $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
+                $imported_at = isset($row['imported_at']) && $row['imported_at'] ? (string)$row['imported_at'] : null;
+                $updated_at = isset($row['updated_at']) && $row['updated_at'] ? (string)$row['updated_at'] : null;
+
+                $color_green = '#28a745';
+                $color_red = '#dc3545';
+                $color_gray = '#6c757d';
+                $color_blue = '#007bff';
+
+                $badgeBg = $color_gray;
+                if ($status === 'imported') $badgeBg = $color_green;
+                elseif ($status === 'updated') $badgeBg = ($updated_at ? $color_green : $color_red);
+                elseif ($status === 'error') $badgeBg = $color_red;
+                elseif ($status === 'processing') $badgeBg = $color_blue;
+                elseif ($status === 'pending') $badgeBg = $color_gray;
+
+                $statuses[$bgid] = array(
+                    'status' => $status,
+                    'label' => $statusLabel,
+                    'badge_bg' => $badgeBg,
+                    'attempts' => $attempts,
+                    'imported_at' => $imported_at,
+                    'updated_at' => $updated_at
+                );
+            }
+
+            $json['success'] = true;
+            $json['statuses'] = $statuses;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getFetchedProductsStatuses failed: ' . $e->getMessage();
         }
 
         $this->response->setOutput(json_encode($json));
