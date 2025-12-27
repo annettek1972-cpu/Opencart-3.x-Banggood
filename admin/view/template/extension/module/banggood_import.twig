@@ -415,6 +415,15 @@ function bindImportButtons($container) {
             '</div>'
           );
         }
+
+        // Force an immediate refresh so the row appears / status flips ASAP.
+        try {
+          if (window.bgPersistedProducts && typeof window.bgPersistedProducts.refreshNow === 'function') {
+            window.bgPersistedProducts.refreshNow();
+            setTimeout(function(){ window.bgPersistedProducts.refreshNow(); }, 750);
+            setTimeout(function(){ window.bgPersistedProducts.refreshNow(); }, 2000);
+          }
+        } catch (ex) {}
       },
       error: function(xhr, status, err) {
         $('#content > .container-fluid').prepend(
@@ -1012,7 +1021,9 @@ $(document).ready(function() {
 */
 
 (function($){
-  var pollIntervalMs = 4000;
+  // Poll quickly so the list feels "instant".
+  // (Also uses a cache-busting query param so browsers/proxies don't serve stale HTML.)
+  var pollIntervalMs = 1000;
   var pollTimer = null;
   var lastFingerprint = null;
   var inFlight = false;
@@ -1222,9 +1233,21 @@ $(document).ready(function() {
     if (inFlight) return;
 
     inFlight = true;
-    $.get(window.location.href, function(data){
+    // Cache-bust the URL to guarantee fresh HTML each poll
+    var url = (window.location.href || '').split('#')[0];
+    url += (url.indexOf('?') >= 0 ? '&' : '?') + 'bg_live=' + Date.now();
+
+    $.ajax({
+      url: url,
+      type: 'get',
+      cache: false,
+      dataType: 'html'
+    }).done(function(data){
       try {
         var $doc = $('<div>').html(data);
+        // If the response isn't the admin page (e.g. session timeout), do nothing.
+        if ($doc.find('#banggood-products').length === 0) return;
+
         var newInnerHtml = $doc.find('#banggood-products').html() || '';
         var fp = fingerprintFromInnerHtml(newInnerHtml);
 
