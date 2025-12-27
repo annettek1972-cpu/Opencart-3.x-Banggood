@@ -2,7 +2,7 @@
 class ControllerExtensionModuleBanggoodImport extends Controller {
     private $error = array();
     // Bump this when debugging live deployments/caches
-    const BG_IMPORT_BUILD = '2025-12-23-queue-fix-3';
+    const BG_IMPORT_BUILD = '2025-12-27-queue-sort-newest-1';
 
     /**
      * Render the persisted fetched-products list directly from DB.
