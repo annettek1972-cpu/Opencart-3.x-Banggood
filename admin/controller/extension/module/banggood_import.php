@@ -1493,7 +1493,8 @@ HTML;
             }
 
             $qr = $this->db->query(
-                "SELECT `bg_product_id`, `status`, `attempts`" . $selectExtra . "
+                "SELECT `bg_product_id`, `status`, `attempts`, `fetched_at`,
+                        (CASE WHEN `fetched_at` IS NULL OR `fetched_at` = '' THEN 0 ELSE UNIX_TIMESTAMP(`fetched_at`) END) AS fetched_at_ts" . $selectExtra . "
                  FROM `" . $tbl . "`
                  WHERE `bg_product_id` IN (" . implode(',', $in) . ")"
             );
@@ -1506,6 +1507,8 @@ HTML;
                 $status = isset($row['status']) ? strtolower((string)$row['status']) : '';
                 $statusLabel = $status !== '' ? strtoupper($status) : '';
                 $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
+                $fetched_at = isset($row['fetched_at']) && $row['fetched_at'] ? (string)$row['fetched_at'] : null;
+                $fetched_at_ts = isset($row['fetched_at_ts']) ? (int)$row['fetched_at_ts'] : 0;
                 $imported_at = isset($row['imported_at']) && $row['imported_at'] ? (string)$row['imported_at'] : null;
                 $updated_at = isset($row['updated_at']) && $row['updated_at'] ? (string)$row['updated_at'] : null;
 
@@ -1526,6 +1529,8 @@ HTML;
                     'label' => $statusLabel,
                     'badge_bg' => $badgeBg,
                     'attempts' => $attempts,
+                    'fetched_at' => $fetched_at,
+                    'fetched_at_ts' => $fetched_at_ts,
                     'imported_at' => $imported_at,
                     'updated_at' => $updated_at
                 );

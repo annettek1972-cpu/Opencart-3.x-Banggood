@@ -87,6 +87,12 @@
       var $row = $('#banggood-products .bg-compact-row[data-bg-product-id="' + bgid.replace(/"/g, '\\"') + '"]');
       if (!$row.length) return;
 
+      // Keep row sort keys synced with DB-fetched_at (so "newest first" is accurate)
+      if (typeof info.fetched_at_ts !== 'undefined' && info.fetched_at_ts !== null) {
+        var ts = parseInt(info.fetched_at_ts, 10);
+        if (!isNaN(ts)) $row.attr('data-fetched-at-ts', String(ts));
+      }
+
       var $badge = $row.find('.bg-status-badge').first();
       if (!$badge.length) return;
 
