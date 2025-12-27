@@ -340,41 +340,7 @@ class ModelExtensionModuleBanggoodImport extends Model {
     return trim($out);
 }
 	
-protected function normalizeImportedOptionName($name) {
-    if ($name === null) return '';
-    // Decode entities and normalize whitespace
-    $name = html_entity_decode((string)$name, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    $name = preg_replace('/\s+/', ' ', trim($name));
 
-    if ($name === '') return '';
-
-    // Remove trailing colon
-    $name = preg_replace('/\s*:\s*$/u', '', $name);
-
-    // Remove trailing ordinal/number tokens like " 1", "-1", "(1)" etc.
-    $name = preg_replace('/[\s\-\_\:\(\)\[\]]*\d+\s*$/u', '', $name);
-
-    // Normalize common synonyms and canonicalize exact group names
-    // If it begins with color/colour -> canonical "Color"
-    if (preg_match('/^\s*(color|colour)\b/i', $name)) {
-        return 'Color';
-    }
-
-    // If it begins with size -> canonical "Size"
-    if (preg_match('/^\s*(size)\b/i', $name)) {
-        return 'Size';
-    }
-
-    // Remove stray "Group" suffixes like "Color Group", "Size Group"
-    $name = preg_replace('/\b(group|grouping)\b$/i', '', $name);
-    $name = trim($name);
-
-    // Capitalize words (keep acronyms as-is)
-    // Use mb_convert_case for multibyte safety
-    $name = mb_convert_case($name, MB_CASE_TITLE, 'UTF-8');
-
-    return $name;
-}
     /* -------------------------
        Helper: ensure warehouse-per-poa map table exists
        ------------------------- */
@@ -1919,6 +1885,7 @@ protected function apiRequestRawSimple($url) {
                 foreach ($poa_list as $group) {
                     if (!is_array($group)) continue;
                     $option_name = isset($group['option_name']) ? (string)$group['option_name'] : (isset($group['name']) ? (string)$group['name'] : '');
+                    $option_name = $this->normalizeImportedOptionName($option_name);
                     if ($option_name === '') continue;
                     $option_id = $this->getOptionIdByName($option_name);
                     if (!$option_id) continue;
@@ -2993,6 +2960,28 @@ protected function apiRequestRawSimple($url) {
         if (empty($html) || !is_string($html)) return $html;
         $bg_id = (string)$bg_id;
 
+        // Build a full base URL so <img src> in description always renders.
+        // Prefer the store (catalog) URL from config; fall back to constants/server URL if needed.
+        $base_url = '';
+        try {
+            $cfg_ssl = $this->config->get('config_ssl');
+            $cfg_url = $this->config->get('config_url');
+            if (is_string($cfg_ssl) && $cfg_ssl !== '') $base_url = $cfg_ssl;
+            elseif (is_string($cfg_url) && $cfg_url !== '') $base_url = $cfg_url;
+        } catch (\Throwable $e) {}
+        if ($base_url === '') {
+            if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) $base_url = HTTPS_CATALOG;
+            elseif (defined('HTTP_CATALOG') && HTTP_CATALOG) $base_url = HTTP_CATALOG;
+            elseif (defined('HTTPS_SERVER') && HTTPS_SERVER) $base_url = HTTPS_SERVER;
+            elseif (defined('HTTP_SERVER') && HTTP_SERVER) $base_url = HTTP_SERVER;
+        }
+        $base_url = trim((string)$base_url);
+        if ($base_url !== '') {
+            // If we accidentally got an admin URL, strip trailing "admin/" segment.
+            $base_url = preg_replace('#/admin/?$#i', '/', $base_url);
+            if (substr($base_url, -1) !== '/') $base_url .= '/';
+        }
+
         libxml_use_internal_errors(true);
         $dom = new DOMDocument();
         $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?><div id="bg_desc_root">' . $html . '</div>');
@@ -3015,22 +3004,38 @@ protected function apiRequestRawSimple($url) {
 
         foreach ($nodes as $img) {
             if (!$img instanceof DOMElement) continue;
+
+            // Ensure images in description are centered (inline, non-invasive: only appends if missing)
+            try {
+                $curStyle = (string)$img->getAttribute('style');
+                $needsCenter = (stripos($curStyle, 'margin-left') === false) && (stripos($curStyle, 'margin-right') === false) && (stripos($curStyle, 'margin:') === false);
+                $needsBlock = (stripos($curStyle, 'display') === false);
+                if ($needsCenter || $needsBlock) {
+                    $add = '';
+                    if ($needsBlock) $add .= 'display:block;';
+                    if ($needsCenter) $add .= 'margin-left:auto;margin-right:auto;';
+                    if ($add !== '') {
+                        $newStyle = trim($curStyle);
+                        if ($newStyle !== '' && substr($newStyle, -1) !== ';') $newStyle .= ';';
+                        $newStyle .= $add;
+                        $img->setAttribute('style', $newStyle);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // best-effort; keep original description intact on any DOM/style errors
+            }
+
             $src = trim((string)$img->getAttribute('src'));
             if ($src === '') continue;
 
             // protocol-relative
             if (strpos($src, '//') === 0) $src = 'https:' . $src;
+            // Only handle remote http(s) images for downloading; keep other schemes intact.
             if (stripos($src, 'http://') !== 0 && stripos($src, 'https://') !== 0) continue;
-
-            // Only Banggood-hosted images
-            $host = '';
-            $p = @parse_url($src);
-            if (is_array($p) && !empty($p['host'])) $host = strtolower($p['host']);
-            if ($host === '' || strpos($host, 'banggood.com') === false) continue;
 
             $norm = preg_replace('/(\?.*)$/', '', $src);
             if (isset($seen[$norm])) {
-                $img->setAttribute('src', 'image/' . ltrim($seen[$norm], '/'));
+                $img->setAttribute('src', $base_url . 'image/' . ltrim($seen[$norm], '/'));
                 continue;
             }
 
@@ -3040,20 +3045,31 @@ protected function apiRequestRawSimple($url) {
 
             $data = null;
             try {
-                $curl_opts = array(
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_CONNECTTIMEOUT => 5,
-                    CURLOPT_TIMEOUT => 25,
-                    CURLOPT_SSL_VERIFYPEER => false,
-                    CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
-                );
-                $ch = curl_init($src);
-                curl_setopt_array($ch, $curl_opts);
-                $data = curl_exec($ch);
-                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                if ($data === false || strlen($data) < 200 || $code < 200 || $code >= 400) $data = null;
+                if (function_exists('curl_init')) {
+                    $curl_opts = array(
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_FOLLOWLOCATION => true,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                        CURLOPT_TIMEOUT => 25,
+                        CURLOPT_SSL_VERIFYPEER => false,
+                        CURLOPT_USERAGENT => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
+                    );
+                    $ch = curl_init($src);
+                    curl_setopt_array($ch, $curl_opts);
+                    $data = curl_exec($ch);
+                    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
+                    if ($data === false || strlen($data) < 200 || $code < 200 || $code >= 400) $data = null;
+                } else {
+                    // Fallback: file_get_contents (some servers don't have curl enabled)
+                    $ctx = stream_context_create(array('http' => array(
+                        'timeout' => 25,
+                        'follow_location' => 1,
+                        'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client'
+                    )));
+                    $tmp = @file_get_contents($src, false, $ctx);
+                    if ($tmp !== false && strlen($tmp) >= 200) $data = $tmp;
+                }
             } catch (\Throwable $e) {
                 $data = null;
             }
@@ -3068,7 +3084,7 @@ protected function apiRequestRawSimple($url) {
             if (!$rel) continue;
 
             $seen[$norm] = $rel;
-            $img->setAttribute('src', 'image/' . ltrim($rel, '/'));
+            $img->setAttribute('src', $base_url . 'image/' . ltrim($rel, '/'));
         }
 
         // Return inner HTML
@@ -3195,6 +3211,7 @@ protected function apiRequestRawSimple($url) {
 
         foreach ($poa_list as $group) {
             $option_name = isset($group['option_name']) ? $group['option_name'] : (isset($group['poa_name']) ? $group['poa_name'] : (isset($group['name']) ? $group['name'] : ''));
+            $option_name = $this->normalizeImportedOptionName($option_name);
             if (!$option_name) continue;
 
             $option_type = 'radio';
@@ -3214,7 +3231,6 @@ protected function apiRequestRawSimple($url) {
                 foreach ($group['option_values'] as $val) {
                     $value_name = isset($val['poa_name']) ? $val['poa_name'] : (isset($val['name']) ? $val['name'] : (isset($val['poa_value']) ? $val['poa_value'] : ''));
                     if ($value_name === '') continue;
-
 
                     // compute sort order for sizes
                     $sort_order = 0;
@@ -3592,67 +3608,53 @@ protected function apiRequestRawSimple($url) {
     }
 
     protected function getOptionIdByName($name) {
-    $name = (string)$name;
-    if ($name === '') return 0;
-
-    // First try normalized canonical name
-    $canonical = $this->normalizeImportedOptionName($name);
-
-    // 1) exact match on normalized name
-    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $this->db->escape($canonical) . "' LIMIT 1");
-    if ($q && $q->num_rows) return (int)$q->row['option_id'];
-
-    // 2) exact match on original (case-insensitive)
-    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE LCASE(`name`) = LCASE('" . $this->db->escape($name) . "') LIMIT 1");
-    if ($q && $q->num_rows) return (int)$q->row['option_id'];
-
-    // 3) try case-insensitive exact match on canonical if different from original
-    if ($canonical !== $name) {
-        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE LCASE(`name`) = LCASE('" . $this->db->escape($canonical) . "') LIMIT 1");
-        if ($q && $q->num_rows) return (int)$q->row['option_id'];
+        $name_esc = $this->db->escape($name);
+        $sql = "SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $name_esc . "' LIMIT 1";
+        $query = $this->db->query($sql);
+        if ($query->num_rows) return (int)$query->row['option_id'];
+        return 0;
     }
 
-    // 4) relaxed: look for options that start with the canonical token (e.g. "Color", "Color 1", "Color A")
-    $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` LIKE '" . $this->db->escape($canonical) . "%' LIMIT 1");
-    if ($q && $q->num_rows) return (int)$q->row['option_id'];
+    /**
+     * Normalize option group names coming from Banggood so imports consistently reuse
+     * the same OpenCart option names (e.g. "Color" not "Color 1", "Size" not "Size 1").
+     *
+     * Keep this narrowly scoped to the commonly duplicated groups.
+     */
+    protected function normalizeImportedOptionName($name) {
+        if ($name === null) return '';
+        $name = html_entity_decode((string)$name, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $name = preg_replace('/\s+/u', ' ', trim($name));
 
-    // 5) try removing trailing numbers from original and search
-    $base = preg_replace('/[\s\-\_\:\(\)\[\]]*\d+\s*$/u', '', $name);
-    $base = trim($base);
-    if ($base !== '' && $base !== $name) {
-        $baseCanonical = $this->normalizeImportedOptionName($base);
-        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` = '" . $this->db->escape($baseCanonical) . "' LIMIT 1");
-        if ($q && $q->num_rows) return (int)$q->row['option_id'];
+        // Only normalize the known duplicated groups ("Color"/"Size") to avoid changing unrelated option names.
+        if (!preg_match('/^(color|colour|size)\b/i', $name)) return $name;
 
-        $q = $this->db->query("SELECT option_id FROM `" . DB_PREFIX . "option_description` WHERE `name` LIKE '" . $this->db->escape($baseCanonical) . "%' LIMIT 1");
-        if ($q && $q->num_rows) return (int)$q->row['option_id'];
+        // Remove trailing punctuation/spacers (e.g. "Color.", "Color:", "Size -", "Size_")
+        $name = preg_replace('/[\s\.\:\-–—_]+$/u', '', $name);
+
+        // Normalize compact forms like "Color1" / "Size2" -> "Color 1" / "Size 2"
+        if (preg_match('/^(color|colour|size)(\d+)$/i', $name, $m)) {
+            $name = $m[1] . ' ' . $m[2];
+        }
+
+        // Canonicalize: "Color", "Color 1", "colour", etc -> "Color"
+        if (preg_match('/^(color|colour)(?:\s+\d+)?$/i', $name)) return 'Color';
+        // Canonicalize: "Size", "Size 1", etc -> "Size"
+        if (preg_match('/^size(?:\s+\d+)?$/i', $name)) return 'Size';
+
+        return $name;
     }
 
-    // Not found
-    return 0;
-}
-
-   protected function addOption($name, $type = 'radio') {
-    $name = (string)$name;
-    if ($name === '') return 0;
-
-    // If an option with this name (or a canonical variant) already exists, reuse it
-    $existing = $this->getOptionIdByName($name);
-    if ($existing) return (int)$existing;
-
-    // Insert new option
-    $this->db->query("INSERT INTO `" . DB_PREFIX . "option` SET `type` = '" . $this->db->escape($type) . "', `sort_order` = 0");
-    $option_id = $this->db->getLastId();
-
-    // Insert descriptions for all languages
-    $this->load->model('localisation/language');
-    $languages = $this->model_localisation_language->getLanguages();
-    $canonical = $this->normalizeImportedOptionName($name);
-    foreach ($languages as $language) {
-        $this->db->query("INSERT INTO `" . DB_PREFIX . "option_description` SET `option_id` = '" . (int)$option_id . "', `language_id` = '" . (int)$language['language_id'] . "', `name` = '" . $this->db->escape($canonical) . "'");
+    protected function addOption($name, $type = 'radio') {
+        $this->db->query("INSERT INTO `" . DB_PREFIX . "option` SET `type` = '" . $this->db->escape($type) . "', `sort_order` = 0");
+        $option_id = $this->db->getLastId();
+        $this->load->model('localisation/language');
+        $languages = $this->model_localisation_language->getLanguages();
+        foreach ($languages as $language) {
+            $this->db->query("INSERT INTO `" . DB_PREFIX . "option_description` SET `option_id` = '" . (int)$option_id . "', `language_id` = '" . (int)$language['language_id'] . "', `name` = '" . $this->db->escape($name) . "'");
+        }
+        return (int)$option_id;
     }
-    return (int)$option_id;
-}
 
     protected function getOptionValueIdByName($option_id, $value_name) {
         $value_name_esc = $this->db->escape($value_name);
@@ -4272,7 +4274,6 @@ protected function apiRequestRawSimple($url) {
     public function refreshBgCategories() {
         $inserted = 0;
         $updated = 0;
-
 
         // Determine source table candidates (import first)
         $sourceCandidates = [
@@ -5119,6 +5120,7 @@ protected function apiRequestRawSimple($url) {
             foreach ($poa_list as $group) {
                 if (!is_array($group)) continue;
                 $option_name = isset($group['option_name']) ? (string)$group['option_name'] : (isset($group['name']) ? (string)$group['name'] : '');
+                $option_name = $this->normalizeImportedOptionName($option_name);
                 if ($option_name === '') continue;
                 $option_id = $this->getOptionIdByName($option_name);
                 if (!$option_id) continue;
