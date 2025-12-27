@@ -1239,6 +1239,177 @@ HTML;
     }
 
     /**
+     * AJAX: getFetchedProductsList
+     *
+     * Returns the persisted fetched-products (queue) list HTML and counts so the admin UI can live-refresh
+     * import statuses (pending/processing/imported/error) without a full page reload.
+     */
+    public function getFetchedProductsList() {
+        $this->load->language('extension/module/banggood_import');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $limit = isset($this->request->post['limit']) ? (int)$this->request->post['limit'] : 200;
+            if ($limit < 1) $limit = 1;
+            if ($limit > 500) $limit = 500;
+
+            list($html, $recent_count, $total_count) = $this->renderFetchedProductsList($limit);
+            $json['success'] = true;
+            $json['html'] = $html;
+            $json['recent_count'] = (int)$recent_count;
+            $json['total_count'] = (int)$total_count;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getFetchedProductsList failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: getFetchedProductsListPaged
+     *
+     * Same as getFetchedProductsList, but paginated (server-side) for the admin UI.
+     * Expects POST:
+     * - page (1-based, optional)
+     * - limit (optional, default 50)
+     */
+    public function getFetchedProductsListPaged() {
+        $this->load->language('extension/module/banggood_import');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $page = isset($this->request->post['page']) ? (int)$this->request->post['page'] : 1;
+            if ($page < 1) $page = 1;
+
+            $limit = isset($this->request->post['limit']) ? (int)$this->request->post['limit'] : 50;
+            if ($limit < 1) $limit = 1;
+            if ($limit > 200) $limit = 200;
+
+            $tbl = $this->getFetchedProductsTableName();
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+            if (!$q->num_rows) {
+                $json['error'] = 'Fetched-products table not found: ' . $tbl;
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $qc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "`");
+            $total_count = isset($qc->row['cnt']) ? (int)$qc->row['cnt'] : 0;
+            $page_total = $limit > 0 ? (int)ceil($total_count / $limit) : 0;
+            if ($page_total > 0 && $page > $page_total) $page = $page_total;
+            $offset = ($page - 1) * $limit;
+
+            $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
+            $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+            $selectExtra = '';
+            if ($importedCol) $selectExtra .= ", `" . $importedCol . "` AS imported_at";
+            else $selectExtra .= ", NULL AS imported_at";
+            if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
+            else $selectExtra .= ", NULL AS updated_at";
+
+            $qr = $this->db->query(
+                "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
+                 FROM `" . $tbl . "`
+                 ORDER BY `fetched_at` DESC, `id` DESC
+                 LIMIT " . (int)$offset . "," . (int)$limit
+            );
+            $rows = $qr->rows;
+            $count = is_array($rows) ? count($rows) : 0;
+
+            $html = '';
+            if ($count === 0) {
+                $html = '<div class="text-muted">No fetched products yet. Use "Fetch" to populate the list.</div>';
+            } else {
+                $from = $offset + 1;
+                $to = $offset + $count;
+                $html .= '<div style="font-size:12px;color:#666;padding:6px 8px;border-bottom:1px solid #eee;">Showing ' . (int)$from . '-' . (int)$to . ' of ' . (int)$total_count . '</div>';
+                $html .= '<div class="bg-fetched-list" style="max-height:520px;overflow:auto;">';
+
+                foreach ($rows as $row) {
+                    $img  = isset($row['img']) ? $row['img'] : '';
+                    $name = isset($row['name']) && $row['name'] !== '' ? $row['name'] : (isset($row['bg_product_id']) ? $row['bg_product_id'] : '');
+                    $meta = isset($row['meta_desc']) ? $row['meta_desc'] : '';
+                    $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
+                    $cat  = isset($row['cat_id']) ? $row['cat_id'] : '';
+                    $fetched_at = isset($row['fetched_at']) && $row['fetched_at'] ? date('Y-m-d', strtotime($row['fetched_at'])) : '';
+                    $status = isset($row['status']) ? strtolower((string)$row['status']) : '';
+                    $statusLabel = $status !== '' ? strtoupper($status) : '';
+                    $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
+                    $imported_at = isset($row['imported_at']) && $row['imported_at'] ? (string)$row['imported_at'] : null;
+                    $updated_at = isset($row['updated_at']) && $row['updated_at'] ? (string)$row['updated_at'] : null;
+
+                    // Real colors requested
+                    $color_green = '#28a745';
+                    $color_red = '#dc3545';
+                    $color_gray = '#6c757d';
+                    $color_blue = '#007bff';
+
+                    $badgeBg = $color_gray;
+                    if ($status === 'imported') $badgeBg = $color_green;
+                    elseif ($status === 'updated') $badgeBg = ($updated_at ? $color_green : $color_red);
+                    elseif ($status === 'error') $badgeBg = $color_red;
+                    elseif ($status === 'processing') $badgeBg = $color_blue;
+                    elseif ($status === 'pending') $badgeBg = $color_gray;
+
+                    $html .= '<div class="bg-compact-row" style="display:flex;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;white-space:nowrap;">';
+                    $html .= '<div style="flex:0 0 36px;margin-right:8px;">';
+                    $html .= '<img src="' . htmlspecialchars($img ?: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', ENT_QUOTES, 'UTF-8') . '" alt="" style="width:36px;height:36px;object-fit:cover;border:1px solid #eaeaea;border-radius:3px"/>';
+                    $html .= '</div>';
+
+                    $html .= '<div style="flex:1 1 auto;min-width:0;overflow:hidden;">';
+                    $html .= '<div style="display:flex;align-items:center;">';
+                    $html .= '<span style="font-weight:600;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '</span>';
+                    $html .= '<small style="color:#777;margin-left:8px;flex:0 0 auto;white-space:nowrap;">#' . htmlspecialchars($bgid, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($cat, ENT_QUOTES, 'UTF-8') . ' • ' . htmlspecialchars($fetched_at, ENT_QUOTES, 'UTF-8') . '</small>';
+                    if ($statusLabel !== '') {
+                        $html .= '<span style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;background:' . htmlspecialchars($badgeBg, ENT_QUOTES, 'UTF-8') . ';flex:0 0 auto;">' . htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') . '</span>';
+                    }
+                    $html .= '</div>';
+
+                    $metaLine = array();
+                    $metaLine[] = 'Attempts: ' . (int)$attempts;
+                    if ($importedCol) $metaLine[] = 'Imported: ' . ($imported_at ? htmlspecialchars(date('Y-m-d H:i', strtotime($imported_at)), ENT_QUOTES, 'UTF-8') : 'null');
+                    if ($updatedCol) $metaLine[] = 'Updated: ' . ($updated_at ? htmlspecialchars(date('Y-m-d H:i', strtotime($updated_at)), ENT_QUOTES, 'UTF-8') : 'null');
+                    $html .= '<div style="color:#999;font-size:12px;white-space:nowrap;">' . implode(' • ', $metaLine) . '</div>';
+                    if ($meta !== '') {
+                        $html .= '<div style="color:#999;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' . htmlspecialchars($meta, ENT_QUOTES, 'UTF-8') . '</div>';
+                    }
+                    $html .= '</div>';
+                    $html .= '</div>';
+                }
+
+                $html .= '</div>';
+            }
+
+            $json['success'] = true;
+            $json['html'] = $html;
+            $json['page'] = (int)$page;
+            $json['page_total'] = (int)$page_total;
+            $json['limit'] = (int)$limit;
+            $json['total_count'] = (int)$total_count;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getFetchedProductsListPaged failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
      * AJAX: importProductById
      *
      * Imports a product by Banggood product_id (calls model importProductById()).
