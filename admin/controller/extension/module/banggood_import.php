@@ -426,6 +426,27 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_fetched_products_total'] = (int)$total_count;
         // --- End: render persisted fetched products for initial view (compact one-line rows) ---
 
+        // --- Start: cron last-run status (written by cron/banggood_import_fetch_chunk.php) ---
+        $cronStatus = null;
+        try {
+            $cronRaw = $this->config->get('module_banggood_import_cron_last_status');
+            if (is_string($cronRaw) && $cronRaw !== '') {
+                $decoded = @json_decode($cronRaw, true);
+                if (is_array($decoded)) $cronStatus = $decoded;
+            } elseif (is_array($cronRaw)) {
+                $cronStatus = $cronRaw;
+            }
+        } catch (\Throwable $e) {
+            $cronStatus = null;
+        }
+        $data['bg_cron_status'] = $cronStatus;
+        $data['get_cron_status_url'] = $this->url->link(
+            'extension/module/banggood_import/getCronStatus',
+            'user_token=' . $this->session->data['user_token'],
+            true
+        );
+        // --- End: cron last-run status ---
+
         // Expose update URL for JS (clean URL generation)
         $data['update_categories_url'] = $this->url->link(
             'extension/module/banggood_import/updateCategories',
@@ -1404,6 +1425,55 @@ HTML;
             $json['total_count'] = (int)$total_count;
         } catch (\Throwable $e) {
             $json['error'] = 'getFetchedProductsListPaged failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: getCronStatus
+     *
+     * Returns the last cron run status stored in settings by cron/banggood_import_fetch_chunk.php.
+     */
+    public function getCronStatus() {
+        $this->load->language('extension/module/banggood_import');
+        $this->load->model('setting/setting');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $raw = null;
+            try {
+                $settings = $this->model_setting_setting->getSetting('module_banggood_import');
+                if (is_array($settings) && isset($settings['module_banggood_import_cron_last_status'])) {
+                    $raw = $settings['module_banggood_import_cron_last_status'];
+                }
+            } catch (\Throwable $e) {
+                $raw = null;
+            }
+            if ($raw === null) {
+                $raw = $this->config->get('module_banggood_import_cron_last_status');
+            }
+
+            $status = null;
+            if (is_string($raw) && $raw !== '') {
+                $decoded = @json_decode($raw, true);
+                if (is_array($decoded)) $status = $decoded;
+            } elseif (is_array($raw)) {
+                $status = $raw;
+            }
+
+            $json['success'] = true;
+            $json['status'] = $status;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getCronStatus failed: ' . $e->getMessage();
         }
 
         $this->response->setOutput(json_encode($json));

@@ -288,6 +288,30 @@ try {
     /** @var ModelSettingSetting $settingModel */
     $settingModel = $registry->get('model_setting_setting');
 
+    // Persist last cron status so admin UI can show it
+    $bg_extract_code = function(string $message): int {
+        if ($message === '') return 0;
+        if (preg_match('/\bcode\s*=\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+        if (preg_match('/\bcode\s*:\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+        return 0;
+    };
+
+    $bg_write_cron_status = function(array $payload) use ($settingModel) {
+        try {
+            $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
+            if (method_exists($settingModel, 'editSettingValue')) {
+                $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_cron_last_status', $json);
+            } else {
+                $cur = $settingModel->getSetting('module_banggood_import');
+                if (!is_array($cur)) $cur = [];
+                $cur['module_banggood_import_cron_last_status'] = $json;
+                $settingModel->editSetting('module_banggood_import', $cur);
+            }
+        } catch (Throwable $e) {
+            // ignore - cron should still output to CLI
+        }
+    };
+
     if ($resetCursor) {
         $cursorNew = json_encode(['category_index' => 0, 'page' => 1, 'offset' => 0]);
         if (method_exists($settingModel, 'editSettingValue')) {
@@ -309,6 +333,13 @@ try {
     $rows = bg_fetch_category_rows($db, 'bg_category');
     if (!$rows) $rows = bg_fetch_category_rows($db, 'bg_category_import');
     if (!$rows) {
+        $bg_write_cron_status([
+            'ran_at' => gmdate('c'),
+            'ok' => false,
+            'source' => 'cron',
+            'chunk_size' => $chunkSize,
+            'message' => 'No Banggood categories available to iterate (bg_category / bg_category_import empty).',
+        ]);
         fwrite(STDERR, "No Banggood categories available to iterate (bg_category / bg_category_import empty).\n");
         exit(2);
     }
@@ -487,8 +518,33 @@ try {
         }
     }
 
-    // Save updated cursor
+    // Compute and persist next cursor (also included in cron status)
     $cursorNew = json_encode(['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset]);
+
+    // Persist cron status for admin UI visibility
+    $api_code = $firstError !== '' ? $bg_extract_code($firstError) : 0;
+    $bg_write_cron_status([
+        'ran_at' => gmdate('c'),
+        'ok' => ($import_errors === 0),
+        'source' => 'cron',
+        'chunk_size' => (int)$chunkSize,
+        'import_mode' => $importMode,
+        'ensure_variants' => (bool)$ensureVariants,
+        'fetched' => (int)count($collected),
+        'persisted' => (int)$persisted,
+        'claimed' => (int)$claimed,
+        'imported' => (int)$imported,
+        'created' => (int)$created,
+        'updated' => (int)$updated,
+        'skipped' => (int)$skipped,
+        'errors' => (int)$import_errors,
+        'first_error' => $firstError,
+        'api_code' => (int)$api_code,
+        'finished' => (bool)$finished,
+        'next_cursor' => $cursorNew,
+    ]);
+
+    // Save updated cursor
     if (method_exists($settingModel, 'editSettingValue')) {
         $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
     } else {
@@ -513,6 +569,23 @@ try {
     // exit code: non-zero if we imported nothing due to errors/fetch issue is not necessarily failure
     exit(0);
 } catch (Throwable $e) {
+    // Best-effort: write failing status if we can reach setting model
+    try {
+        if (isset($settingModel) && isset($bg_write_cron_status) && is_callable($bg_write_cron_status)) {
+            $msg = $e->getMessage();
+            $code = isset($bg_extract_code) && is_callable($bg_extract_code) ? (int)$bg_extract_code($msg) : 0;
+            $bg_write_cron_status([
+                'ran_at' => gmdate('c'),
+                'ok' => false,
+                'source' => 'cron',
+                'chunk_size' => (int)$chunkSize,
+                'message' => 'Cron failed: ' . $msg,
+                'api_code' => (int)$code,
+            ]);
+        }
+    } catch (Throwable $x) {
+        // ignore
+    }
     fwrite(STDERR, "Cron failed: " . $e->getMessage() . "\n");
     exit(1);
 }

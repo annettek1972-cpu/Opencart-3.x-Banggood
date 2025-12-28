@@ -81,6 +81,13 @@
           <div class="col-md-8">
             {# Buttons moved to top of products column and sized like Update Categories #}
             <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
+              <div id="bg-cron-status" class="text-muted" style="margin-right:auto; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55%;">
+                {% if bg_cron_status %}
+                  <span><strong>Cron:</strong> {{ bg_cron_status.ran_at|default('unknown') }} • {% if bg_cron_status.ok %}<span style="color:#28a745;">OK</span>{% else %}<span style="color:#dc3545;">ERROR</span>{% endif %}{% if bg_cron_status.api_code %} • Code {{ bg_cron_status.api_code }}{% endif %}{% if bg_cron_status.first_error %} • {{ bg_cron_status.first_error }}{% endif %}</span>
+                {% else %}
+                  <span><strong>Cron:</strong> no status yet</span>
+                {% endif %}
+              </div>
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
                 <input id="bg-update-minutes" type="number" value="30" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
@@ -385,6 +392,10 @@ var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/get
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getCronStatusUrl = '{{ get_cron_status_url|default(('index.php?route=extension/module/banggood_import/getCronStatus&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
+
+// Initial cron status from server render (optional)
+var bgCronStatusInitial = {% if bg_cron_status %}{{ bg_cron_status|json_encode|raw }}{% else %}null{% endif %};
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
@@ -1016,6 +1027,41 @@ $('#btn-reset-fetch').on('click', function(e){
 
 // Initialize tree on page load if server pre-rendered HTML exists
 $(document).ready(function() {
+  // Render cron status banner + poll periodically so cron errors are visible in admin.
+  function renderCronStatus(st) {
+    var $el = $('#bg-cron-status');
+    if (!$el.length) return;
+    if (!st) {
+      $el.html('<span><strong>Cron:</strong> no status yet</span>');
+      return;
+    }
+    var ran = st.ran_at || 'unknown';
+    var ok = !!st.ok;
+    var api = st.api_code ? (' • Code ' + st.api_code) : '';
+    var msg = st.first_error ? (' • ' + String(st.first_error)) : (st.message ? (' • ' + String(st.message)) : '');
+    var stateHtml = ok ? '<span style="color:#28a745;">OK</span>' : '<span style="color:#dc3545;">ERROR</span>';
+    $el.html('<span><strong>Cron:</strong> ' + ran + ' • ' + stateHtml + api + msg + '</span>');
+  }
+
+  function refreshCronStatusOnce() {
+    if (!getCronStatusUrl) return;
+    $.ajax({
+      url: getCronStatusUrl,
+      type: 'post',
+      dataType: 'json',
+      timeout: 15000,
+      data: {},
+      success: function(json) {
+        if (json && json.status) renderCronStatus(json.status);
+      }
+    });
+  }
+
+  // Initial render
+  renderCronStatus(bgCronStatusInitial);
+  // Poll every 30s
+  setInterval(refreshCronStatusOnce, 30000);
+
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
   }
