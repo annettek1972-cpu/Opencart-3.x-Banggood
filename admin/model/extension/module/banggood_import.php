@@ -770,21 +770,34 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         // - pending
         // - updated where updated_at is NULL (if column exists), otherwise include updated too.
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
-        $where = "`status` = 'pending'";
+        // Use TRIM to avoid issues with accidental whitespace in status.
+        $where = "TRIM(`status`) = 'pending'";
         if ($updatedCol) {
-            $where .= " OR (`status` = 'updated' AND `" . $updatedCol . "` IS NULL)";
+            $where .= " OR (TRIM(`status`) = 'updated' AND `" . $updatedCol . "` IS NULL)";
         } else {
-            $where .= " OR `status` = 'updated'";
+            $where .= " OR TRIM(`status`) = 'updated'";
         }
 
-        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
+        // IMPORTANT: process newest pending first so the top-of-list pending items get imported on the next run.
+        $qr = $this->db->query(
+            "SELECT * FROM `" . $tbl . "`
+             WHERE (" . $where . ")
+             ORDER BY (CASE WHEN `fetched_at` IS NULL OR `fetched_at` = '' THEN 0 ELSE UNIX_TIMESTAMP(`fetched_at`) END) DESC,
+                      `id` DESC
+             LIMIT " . (int)$limit
+        );
         $rows = $qr->rows;
 
         if (!empty($rows)) {
             $ids = array();
             foreach ($rows as $r) $ids[] = (int)$r['id'];
             // Mark selected rows as processing and increment attempts
-            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+            $this->db->query(
+                "UPDATE `" . $tbl . "`
+                 SET `status` = 'processing',
+                     `attempts` = COALESCE(`attempts`, 0) + 1
+                 WHERE `id` IN (" . implode(',', $ids) . ")"
+            );
         }
 
         return $rows;
