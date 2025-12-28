@@ -2066,6 +2066,10 @@ protected function apiRequestRawSimple($url) {
        Debug logger (tries multiple locations then error_log)
        ------------------------- */
     protected function writeDebugLog($bg_id, array $diagnostics) {
+        // Disabled to prevent log files from consuming disk space.
+        // (Import behavior is unaffected; errors still surface via UI/Exceptions.)
+        return;
+
         $filename = 'banggood_import_debug_' . preg_replace('/[^0-9A-Za-z_.-]/', '_', $bg_id) . '.log';
         $entry = array('ts' => date('c'), 'diagnostics' => $diagnostics);
         $json = json_encode($entry, JSON_PRETTY_PRINT) . PHP_EOL;
@@ -2273,7 +2277,14 @@ protected function apiRequestRawSimple($url) {
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            // Restore original behavior (fixed 30s total timeout)
             curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            // Optional: force IPv4 (off by default, matches older behavior).
+            // Enable by setting: module_banggood_import_curl_force_ipv4 = 1
+            $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+            if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+                curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            }
             if (strtoupper($method) === 'POST') {
                 curl_setopt($ch, CURLOPT_POST, 1);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&'));
@@ -2327,7 +2338,12 @@ protected function apiRequestRawSimple($url) {
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        // Restore original behavior (fixed 30s total timeout)
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+        if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+            curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        }
         if (strtoupper($method) === 'POST') { curl_setopt($ch, CURLOPT_POST, 1); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&')); }
         $result = curl_exec($ch);
         if ($result === false) {
