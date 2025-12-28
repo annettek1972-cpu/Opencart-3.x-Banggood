@@ -2277,7 +2277,23 @@ protected function apiRequestRawSimple($url) {
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            // Timeouts:
+            // - connect timeout: fail fast if host is unreachable
+            // - total timeout: allow slow responses (Banggood can be slow/blocked upstream)
+            $connectTimeout = (int)$this->config->get('module_banggood_import_curl_connect_timeout');
+            if ($connectTimeout <= 0) $connectTimeout = 10;
+            if ($connectTimeout < 3) $connectTimeout = 3;
+            if ($connectTimeout > 30) $connectTimeout = 30;
+
+            $timeout = (int)$this->config->get('module_banggood_import_curl_timeout');
+            if ($timeout <= 0) $timeout = 55;
+            if ($timeout < 10) $timeout = 10;
+            if ($timeout > 180) $timeout = 180;
+
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $connectTimeout);
+            curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+            // Avoid signals that can break timeouts in some SAPIs
+            if (defined('CURLOPT_NOSIGNAL')) curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
             if (strtoupper($method) === 'POST') {
                 curl_setopt($ch, CURLOPT_POST, 1);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&'));
@@ -2331,7 +2347,19 @@ protected function apiRequestRawSimple($url) {
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $connectTimeout = (int)$this->config->get('module_banggood_import_curl_connect_timeout');
+        if ($connectTimeout <= 0) $connectTimeout = 10;
+        if ($connectTimeout < 3) $connectTimeout = 3;
+        if ($connectTimeout > 30) $connectTimeout = 30;
+
+        $timeout = (int)$this->config->get('module_banggood_import_curl_timeout');
+        if ($timeout <= 0) $timeout = 55;
+        if ($timeout < 10) $timeout = 10;
+        if ($timeout > 180) $timeout = 180;
+
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $connectTimeout);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        if (defined('CURLOPT_NOSIGNAL')) curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
         if (strtoupper($method) === 'POST') { curl_setopt($ch, CURLOPT_POST, 1); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&')); }
         $result = curl_exec($ch);
         if ($result === false) {
