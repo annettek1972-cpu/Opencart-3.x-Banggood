@@ -80,6 +80,22 @@
 
           <div class="col-md-8">
             {# Buttons moved to top of products column and sized like Update Categories #}
+            <div id="bg-cron-status-wrap"
+                 class="{% if bg_cron_last_error and bg_cron_last_error.api_code %}bg-cron-wrap bg-cron-wrap-error{% elseif bg_cron_status and bg_cron_status.ok %}bg-cron-wrap bg-cron-wrap-ok{% elseif bg_cron_status and (not bg_cron_status.ok) %}bg-cron-wrap bg-cron-wrap-error{% else %}bg-cron-wrap bg-cron-wrap-none{% endif %}"
+                 style="margin-bottom:8px;">
+              <div id="bg-cron-status" class="text-muted" style="font-size:12px; white-space:normal; overflow-wrap:anywhere;">
+                {% if bg_cron_status %}
+                  <span><strong>Cron:</strong> {{ bg_cron_status.ran_at|default('unknown') }} • {% if bg_cron_status.ok %}<span class="bg-cron-state bg-cron-ok">OK</span>{% else %}<span class="bg-cron-state bg-cron-error">ERROR</span>{% endif %}{% if bg_cron_status.api_code %} • <span class="bg-cron-error-text">Code {{ bg_cron_status.api_code }}</span>{% endif %}{% if bg_cron_status.first_error %} • <span class="bg-cron-error-text">{{ bg_cron_status.first_error }}</span>{% endif %}</span>
+                {% else %}
+                  <span><strong>Cron:</strong> no status yet</span>
+                {% endif %}
+              </div>
+              <div id="bg-cron-last-error" class="text-muted" style="margin-top:2px;font-size:12px; white-space:normal; overflow-wrap:anywhere;">
+                {% if bg_cron_last_error and bg_cron_last_error.api_code %}
+                  <span><strong>Last cron error:</strong> <span class="bg-cron-error-text">Code {{ bg_cron_last_error.api_code }}{% if bg_cron_last_error.first_error %} • {{ bg_cron_last_error.first_error }}{% endif %}</span></span>
+                {% endif %}
+              </div>
+            </div>
             <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
@@ -371,6 +387,28 @@
     width: 22px;
     display: inline-block;
   }
+
+  /* Cron status hooks (default colors; override in your own CSS as needed) */
+  #bg-cron-status-wrap.bg-cron-wrap {
+    padding: 8px 10px;
+    border-radius: 4px;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-ok {
+    background: #28a745;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-error {
+    background: #dc3545;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-none {
+    background: #6c757d;
+  }
+  /* Make all cron banner text readable on colored backgrounds */
+  #bg-cron-status-wrap,
+  #bg-cron-status-wrap .text-muted,
+  #bg-cron-status-wrap strong,
+  #bg-cron-status-wrap span {
+    color: #ffffff !important;
+  }
 </style>
 
 <script type="text/javascript">
@@ -385,9 +423,16 @@ var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/get
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getCronStatusUrl = '{{ get_cron_status_url|default(('index.php?route=extension/module/banggood_import/getCronStatus&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
+
+// Initial cron status from server render (optional)
+var bgCronStatusInitial = {% if bg_cron_status %}{{ bg_cron_status|json_encode|raw }}{% else %}null{% endif %};
+var bgCronLastErrorInitial = {% if bg_cron_last_error %}{{ bg_cron_last_error|json_encode|raw }}{% else %}null{% endif %};
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
+// Track selected Banggood category id for Fetch (so we don't scan all categories).
+var bgSelectedCatId = '';
 
 // Persisted queue pagination state (AJAX)
 var bgQueuePage = 1;
@@ -594,6 +639,7 @@ function initBanggoodCategoryTree() {
       if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
     }
     if (cid) {
+      bgSelectedCatId = String(cid);
       loadProducts(cid, 1);
     }
   });
@@ -615,6 +661,7 @@ function initBanggoodCategoryTree() {
     $b.css({'background-color':'#dff0d8','transition':'background-color 0.25s'});
     setTimeout(function(){ $b.css('background-color', orig); }, 600);
   });
+
 }
 
 // Ensure controls exist and wire search / expand / collapse (will not duplicate controls)
@@ -1011,6 +1058,76 @@ $('#btn-reset-fetch').on('click', function(e){
 
 // Initialize tree on page load if server pre-rendered HTML exists
 $(document).ready(function() {
+  // Render cron status banner + poll periodically so cron errors are visible in admin.
+  function setCronBannerClass(status, lastError) {
+    var $wrap = $('#bg-cron-status-wrap');
+    if (!$wrap.length) return;
+    $wrap.removeClass('bg-cron-wrap-ok bg-cron-wrap-error bg-cron-wrap-none');
+
+    // Treat any saved last_error as "error state" even if the latest run is OK.
+    if (lastError && lastError.api_code) {
+      $wrap.addClass('bg-cron-wrap-error');
+      return;
+    }
+    if (status && status.ok === true) {
+      $wrap.addClass('bg-cron-wrap-ok');
+      return;
+    }
+    if (status && status.ok === false) {
+      $wrap.addClass('bg-cron-wrap-error');
+      return;
+    }
+    $wrap.addClass('bg-cron-wrap-none');
+  }
+
+  function renderCronStatus(st) {
+    var $el = $('#bg-cron-status');
+    if (!$el.length) return;
+    if (!st) {
+      $el.html('<span><strong>Cron:</strong> no status yet</span>');
+      return;
+    }
+    var ran = st.ran_at || 'unknown';
+    var ok = !!st.ok;
+    var api = st.api_code ? (' • <span class="bg-cron-error-text">Code ' + st.api_code + '</span>') : '';
+    var msg = st.first_error ? (' • <span class="bg-cron-error-text">' + String(st.first_error) + '</span>') : (st.message ? (' • <span class="bg-cron-error-text">' + String(st.message) + '</span>') : '');
+    var stateHtml = ok ? '<span class="bg-cron-state bg-cron-ok">OK</span>' : '<span class="bg-cron-state bg-cron-error">ERROR</span>';
+    $el.html('<span><strong>Cron:</strong> ' + ran + ' • ' + stateHtml + api + msg + '</span>');
+  }
+
+  function renderCronLastError(st) {
+    var $el = $('#bg-cron-last-error');
+    if (!$el.length) return;
+    if (!st || !st.api_code) { $el.empty(); return; }
+    var api = 'Code ' + st.api_code;
+    var msg = st.first_error ? (' • ' + String(st.first_error)) : (st.message ? (' • ' + String(st.message)) : '');
+    $el.html('<span><strong>Last cron error:</strong> <span class="bg-cron-error-text">' + api + msg + '</span></span>');
+  }
+
+  function refreshCronStatusOnce() {
+    if (!getCronStatusUrl) return;
+    $.ajax({
+      url: getCronStatusUrl,
+      type: 'post',
+      dataType: 'json',
+      timeout: 15000,
+      data: {},
+      success: function(json) {
+        if (!json) return;
+        if (typeof json.status !== 'undefined') renderCronStatus(json.status);
+        if (typeof json.last_error !== 'undefined') renderCronLastError(json.last_error);
+        setCronBannerClass(json.status, json.last_error);
+      }
+    });
+  }
+
+  // Initial render
+  renderCronStatus(bgCronStatusInitial);
+  renderCronLastError(bgCronLastErrorInitial);
+  setCronBannerClass(bgCronStatusInitial, bgCronLastErrorInitial);
+  // Poll every 30s
+  setInterval(refreshCronStatusOnce, 30000);
+
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
   }
