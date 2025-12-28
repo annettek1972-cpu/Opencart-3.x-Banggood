@@ -426,8 +426,9 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_fetched_products_total'] = (int)$total_count;
         // --- End: render persisted fetched products for initial view (compact one-line rows) ---
 
-        // --- Start: cron last-run status (written by cron/banggood_import_fetch_chunk.php) ---
+        // --- Start: cron last-run status + sticky last-error (written by cron/banggood_import_fetch_chunk.php) ---
         $cronStatus = null;
+        $cronLastError = null;
         try {
             $cronRaw = $this->config->get('module_banggood_import_cron_last_status');
             if (is_string($cronRaw) && $cronRaw !== '') {
@@ -436,10 +437,19 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             } elseif (is_array($cronRaw)) {
                 $cronStatus = $cronRaw;
             }
+            $errRaw = $this->config->get('module_banggood_import_cron_last_error');
+            if (is_string($errRaw) && $errRaw !== '') {
+                $decodedE = @json_decode($errRaw, true);
+                if (is_array($decodedE)) $cronLastError = $decodedE;
+            } elseif (is_array($errRaw)) {
+                $cronLastError = $errRaw;
+            }
         } catch (\Throwable $e) {
             $cronStatus = null;
+            $cronLastError = null;
         }
         $data['bg_cron_status'] = $cronStatus;
+        $data['bg_cron_last_error'] = $cronLastError;
         $data['get_cron_status_url'] = $this->url->link(
             'extension/module/banggood_import/getCronStatus',
             'user_token=' . $this->session->data['user_token'],
@@ -1450,16 +1460,24 @@ HTML;
             }
 
             $raw = null;
+            $rawErr = null;
             try {
                 $settings = $this->model_setting_setting->getSetting('module_banggood_import');
                 if (is_array($settings) && isset($settings['module_banggood_import_cron_last_status'])) {
                     $raw = $settings['module_banggood_import_cron_last_status'];
                 }
+                if (is_array($settings) && isset($settings['module_banggood_import_cron_last_error'])) {
+                    $rawErr = $settings['module_banggood_import_cron_last_error'];
+                }
             } catch (\Throwable $e) {
                 $raw = null;
+                $rawErr = null;
             }
             if ($raw === null) {
                 $raw = $this->config->get('module_banggood_import_cron_last_status');
+            }
+            if ($rawErr === null) {
+                $rawErr = $this->config->get('module_banggood_import_cron_last_error');
             }
 
             $status = null;
@@ -1470,8 +1488,17 @@ HTML;
                 $status = $raw;
             }
 
+            $last_error = null;
+            if (is_string($rawErr) && $rawErr !== '') {
+                $decodedE = @json_decode($rawErr, true);
+                if (is_array($decodedE)) $last_error = $decodedE;
+            } elseif (is_array($rawErr)) {
+                $last_error = $rawErr;
+            }
+
             $json['success'] = true;
             $json['status'] = $status;
+            $json['last_error'] = $last_error;
         } catch (\Throwable $e) {
             $json['error'] = 'getCronStatus failed: ' . $e->getMessage();
         }

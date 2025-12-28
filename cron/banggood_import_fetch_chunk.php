@@ -296,19 +296,27 @@ try {
         return 0;
     };
 
-    $bg_write_cron_status = function(array $payload) use ($settingModel) {
+    $bg_write_setting_value = function(string $key, $value) use ($settingModel) {
         try {
-            $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
             if (method_exists($settingModel, 'editSettingValue')) {
-                $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_cron_last_status', $json);
+                $settingModel->editSettingValue('module_banggood_import', $key, $value);
             } else {
                 $cur = $settingModel->getSetting('module_banggood_import');
                 if (!is_array($cur)) $cur = [];
-                $cur['module_banggood_import_cron_last_status'] = $json;
+                $cur[$key] = $value;
                 $settingModel->editSetting('module_banggood_import', $cur);
             }
         } catch (Throwable $e) {
             // ignore - cron should still output to CLI
+        }
+    };
+
+    $bg_write_cron_status = function(array $payload) use ($bg_write_setting_value) {
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        $bg_write_setting_value('module_banggood_import_cron_last_status', $json);
+        // If this status is a failure, also persist a sticky "last error" record
+        if (isset($payload['ok']) && $payload['ok'] === false) {
+            $bg_write_setting_value('module_banggood_import_cron_last_error', $json);
         }
     };
 

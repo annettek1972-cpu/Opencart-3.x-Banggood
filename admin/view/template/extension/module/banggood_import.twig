@@ -88,6 +88,11 @@
                   <span><strong>Cron:</strong> no status yet</span>
                 {% endif %}
               </div>
+              <div id="bg-cron-last-error" class="text-muted" style="font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%;">
+                {% if bg_cron_last_error and bg_cron_last_error.api_code %}
+                  <span><strong>Last cron error:</strong> Code {{ bg_cron_last_error.api_code }}{% if bg_cron_last_error.first_error %} • {{ bg_cron_last_error.first_error }}{% endif %}</span>
+                {% endif %}
+              </div>
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
                 <input id="bg-update-minutes" type="number" value="30" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
@@ -396,6 +401,7 @@ var getCronStatusUrl = '{{ get_cron_status_url|default(('index.php?route=extensi
 
 // Initial cron status from server render (optional)
 var bgCronStatusInitial = {% if bg_cron_status %}{{ bg_cron_status|json_encode|raw }}{% else %}null{% endif %};
+var bgCronLastErrorInitial = {% if bg_cron_last_error %}{{ bg_cron_last_error|json_encode|raw }}{% else %}null{% endif %};
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
@@ -1043,6 +1049,15 @@ $(document).ready(function() {
     $el.html('<span><strong>Cron:</strong> ' + ran + ' • ' + stateHtml + api + msg + '</span>');
   }
 
+  function renderCronLastError(st) {
+    var $el = $('#bg-cron-last-error');
+    if (!$el.length) return;
+    if (!st || !st.api_code) { $el.empty(); return; }
+    var api = 'Code ' + st.api_code;
+    var msg = st.first_error ? (' • ' + String(st.first_error)) : (st.message ? (' • ' + String(st.message)) : '');
+    $el.html('<span><strong>Last cron error:</strong> ' + api + msg + '</span>');
+  }
+
   function refreshCronStatusOnce() {
     if (!getCronStatusUrl) return;
     $.ajax({
@@ -1052,13 +1067,15 @@ $(document).ready(function() {
       timeout: 15000,
       data: {},
       success: function(json) {
-        if (json && json.status) renderCronStatus(json.status);
+        if (json && typeof json.status !== 'undefined') renderCronStatus(json.status);
+        if (json && typeof json.last_error !== 'undefined') renderCronLastError(json.last_error);
       }
     });
   }
 
   // Initial render
   renderCronStatus(bgCronStatusInitial);
+  renderCronLastError(bgCronLastErrorInitial);
   // Poll every 30s
   setInterval(refreshCronStatusOnce, 30000);
 
