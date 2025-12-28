@@ -314,7 +314,102 @@ try {
     }
 
     $total_categories = count($rows);
-    $collected = [];
+$collected = [];
+
+// Process existing pending queue first (before fetching anything new)
+$rowsToProcess = [];
+if (method_exists($bgModel, 'fetchPendingForProcessing')) {
+    try {
+        $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
+    } catch (Throwable $e) {
+        $rowsToProcess = [];
+    }
+}
+
+if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
+    $claimed = count($rowsToProcess);
+    $imported = 0;
+    $import_errors = 0;
+    $firstError = '';
+    $created = 0;
+    $updated = 0;
+    $skipped = 0;
+
+    foreach ($rowsToProcess as $row) {
+        $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
+        if ($pid === '') continue;
+        try {
+            $res = null;
+            $usedMode = $importMode;
+            $variantSync = false;
+
+            // Try to locate a URL in the persisted row (raw_json) when using auto/url.
+            $url = '';
+            if (($importMode === 'auto' || $importMode === 'url') && !empty($row['raw_json'])) {
+                $raw = @json_decode((string)$row['raw_json'], true);
+                if (is_array($raw)) {
+                    foreach (['product_url', 'url', 'href', 'link'] as $k) {
+                        if (!empty($raw[$k]) && is_string($raw[$k])) { $url = $raw[$k]; break; }
+                    }
+                }
+            }
+
+            if ($importMode === 'id') {
+                $res = $bgModel->importProductById($pid);
+            } else {
+                if ($url === '') $url = 'https://www.banggood.com/item/' . rawurlencode($pid) . '.html';
+                if ($importMode === 'auto') $usedMode = ($url !== '' ? 'url' : 'id');
+                $res = $bgModel->importProductUrl($url);
+            }
+
+            if ($ensureVariants && $usedMode !== 'id') {
+                $bgModel->importProductById($pid);
+                $variantSync = true;
+            }
+
+            if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
+            $imported++;
+
+            $r = '';
+            if (is_array($res) && isset($res['result'])) {
+                $r = (string)$res['result'];
+            } elseif (is_array($res) && (isset($res['created']) || isset($res['updated']))) {
+                $c = !empty($res['created']);
+                $u = !empty($res['updated']);
+                if ($c) $r = 'created';
+                elseif ($u) $r = 'updated';
+                else $r = 'skip';
+            }
+
+            if ($r === 'created') $created++;
+            elseif ($r === 'updated') $updated++;
+            elseif ($r === 'skip') $skipped++;
+
+            if ($verbose) {
+                fwrite(STDOUT, "Imported(pending-first) bg_product_id={$pid} mode={$usedMode}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
+            }
+        } catch (Throwable $e) {
+            if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
+            $import_errors++;
+            if ($firstError === '') $firstError = $e->getMessage();
+            if ($verbose) fwrite(STDERR, "ERROR(pending-first) bg_product_id={$pid} " . $e->getMessage() . "\n");
+        }
+    }
+
+    // Output and exit: pending-first run does not advance fetch cursor
+    $out = [
+        'mode' => 'pending-first',
+        'claimed' => (int)$claimed,
+        'imported' => (int)$imported,
+        'import_errors' => (int)$import_errors,
+        'created' => (int)$created,
+        'updated' => (int)$updated,
+        'skipped' => (int)$skipped,
+        'error' => ($firstError !== '' ? $firstError : null),
+    ];
+    fwrite(STDOUT, json_encode($out, JSON_UNESCAPED_SLASHES) . "\n");
+    exit($import_errors > 0 ? 2 : 0);
+}
 
     $next_category_index = $category_index;
     $next_page = $page;

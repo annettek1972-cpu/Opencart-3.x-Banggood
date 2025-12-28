@@ -2040,6 +2040,50 @@ HTML;
 
             $chunk_size = isset($this->request->post['chunk_size']) ? max(1, (int)$this->request->post['chunk_size']) : 10;
 
+            /**
+             * IMPORTANT:
+             * If there are already pending rows in oc_bg_fetched_products, process them FIRST.
+             * This prevents the queue from accumulating "pending" rows that never get imported.
+             */
+            try {
+                if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
+                    $rowsToProcess = $this->model_extension_module_banggood_import->fetchPendingForProcessing($chunk_size);
+                    if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
+                        $imported = 0;
+                        $import_errors = 0;
+
+                        foreach ($rowsToProcess as $row) {
+                            $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
+                            if ($pid === '') continue;
+                            try {
+                                $this->model_extension_module_banggood_import->importProductById($pid);
+                                if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
+                                    $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
+                                }
+                                $imported++;
+                            } catch (\Throwable $e) {
+                                if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
+                                    $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
+                                }
+                                $import_errors++;
+                            }
+                        }
+
+                        // Return the refreshed DB list (pending-first ordering is applied in renderFetchedProductsList())
+                        list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
+                        $json['success'] = true;
+                        $json['imported'] = (int)$imported;
+                        $json['import_errors'] = (int)$import_errors;
+                        $json['persisted'] = 0;
+                        $json['html'] = $html;
+                        $this->response->setOutput(json_encode($json));
+                        return;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // non-fatal: if pending-processing fails, continue with normal fetch flow
+            }
+
             // Server-side cursor: stored in settings so it resumes after reloads.
             $cursorRaw = $this->config->get('module_banggood_import_fetch_cursor');
             $cursor = array('category_index' => 0, 'page' => 1, 'offset' => 0);
