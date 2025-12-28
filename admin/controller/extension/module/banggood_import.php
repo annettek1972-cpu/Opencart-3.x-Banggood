@@ -2000,8 +2000,8 @@ HTML;
             // Default to queue-only so "Fetch" stays responsive. Set import_now=1 to force synchronous import.
             $import_now = !empty($this->request->post['import_now']) && (int)$this->request->post['import_now'] === 1;
 
-            // Optional: if a category is selected in the admin UI, fetch from that category only.
-            // This avoids scanning across thousands of categories (which can cause long runtimes and cURL timeouts).
+            // Prefer fetching from a selected category (sub-category) instead of scanning across all categories.
+            // Scanning can cause long runtimes and cURL timeouts; category-only fetch is predictable and fast.
             $req_cat_id = isset($this->request->post['cat_id']) ? trim((string)$this->request->post['cat_id']) : '';
 
             // Server-side cursor: stored in settings so it resumes after reloads.
@@ -2030,6 +2030,11 @@ HTML;
                 $cursor_cat_id = $req_cat_id;
             }
 
+            // If no category was selected in the UI, but we have a previous category in the cursor, reuse it.
+            if ($req_cat_id === '' && $cursor_cat_id !== '') {
+                $req_cat_id = $cursor_cat_id;
+            }
+
             $fetchRows = function($shortTable) {
                 $fullTable = DB_PREFIX . $shortTable;
                 try {
@@ -2050,18 +2055,13 @@ HTML;
                 }
             };
 
-            // If a category id is supplied, fetch from that category only.
-            if ($req_cat_id !== '') {
-                $rows = array(array('cat_id' => $req_cat_id));
-            } else {
-                $rows = $fetchRows('bg_category');
-                if (!$rows) $rows = $fetchRows('bg_category_import');
-                if (empty($rows)) {
-                    $json['error'] = 'No Banggood categories available to iterate.';
-                    $this->response->setOutput(json_encode($json));
-                    return;
-                }
+            // Require a category selection for Fetch; do not scan across all categories (too slow/unreliable).
+            if ($req_cat_id === '') {
+                $json['error'] = 'Please click a Banggood sub-category on the left, then click Fetch. (Fetching across all categories is disabled to prevent timeouts.)';
+                $this->response->setOutput(json_encode($json));
+                return;
             }
+            $rows = array(array('cat_id' => $req_cat_id));
 
             $total_categories = count($rows);
             $collected = array();
@@ -2104,6 +2104,8 @@ HTML;
                         $code = $extractApiCode($last_fetch_error);
                         if ($code === 41010) {
                             $json['error'] = 'Banggood API rate limit (41010): You have exceeded the maximum number of calls. Please try again later (Banggood may require waiting up to 2 days).';
+                        } elseif ($code === 12022) {
+                            $json['error'] = 'Banggood API error (12022): Cannot query by this cat_id. Please select a sub-category (not a parent category) and try again.';
                         } elseif ($code === 31010) {
                             $json['error'] = 'Banggood API error (31010): Illegal request. Ensure the API is configured to allow your server IP.';
                         } elseif ($code === 21020) {

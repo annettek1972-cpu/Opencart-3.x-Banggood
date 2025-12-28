@@ -2281,7 +2281,9 @@ protected function apiRequestRawSimple($url) {
             curl_setopt($ch, CURLOPT_TIMEOUT, 30);
             // Some hosts have broken IPv6 routing. PHP/cURL may prefer IPv6 while CLI curl uses IPv4.
             // Allow forcing IPv4 via module setting to prevent "0 bytes received" timeouts.
-            $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+            // Default to IPv4 to match typical CLI curl behavior and avoid IPv6 routing issues.
+            $force_v4 = $this->config->get('module_banggood_import_curl_force_ipv4');
+            $force_v4 = ($force_v4 === null || $force_v4 === '' ? 1 : (int)$force_v4);
             if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
                 curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
             }
@@ -2344,7 +2346,8 @@ protected function apiRequestRawSimple($url) {
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         // Restore original behavior (fixed 30s total timeout)
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-        $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+        $force_v4 = $this->config->get('module_banggood_import_curl_force_ipv4');
+        $force_v4 = ($force_v4 === null || $force_v4 === '' ? 1 : (int)$force_v4);
         if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
             curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
         }
