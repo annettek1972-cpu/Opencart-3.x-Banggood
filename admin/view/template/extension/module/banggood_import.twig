@@ -431,6 +431,8 @@ var bgCronLastErrorInitial = {% if bg_cron_last_error %}{{ bg_cron_last_error|js
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
+// Track selected Banggood category id for Fetch (so we don't scan all categories).
+var bgSelectedCatId = '';
 
 // Persisted queue pagination state (AJAX)
 var bgQueuePage = 1;
@@ -637,6 +639,7 @@ function initBanggoodCategoryTree() {
       if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
     }
     if (cid) {
+      bgSelectedCatId = String(cid);
       loadProducts(cid, 1);
     }
   });
@@ -937,7 +940,9 @@ $('#btn-fetch-chunk').on('click', function(e){
     timeout: 60000,
     data: {
       chunk_size: count,
-      import_now: 0
+      import_now: 0,
+      // Prefer fetching from the currently selected category to avoid scanning across all categories (slow + can timeout).
+      cat_id: bgSelectedCatId
     },
     success: function(json) {
       if (json.error) {

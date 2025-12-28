@@ -2000,21 +2000,35 @@ HTML;
             // Default to queue-only so "Fetch" stays responsive. Set import_now=1 to force synchronous import.
             $import_now = !empty($this->request->post['import_now']) && (int)$this->request->post['import_now'] === 1;
 
+            // Optional: if a category is selected in the admin UI, fetch from that category only.
+            // This avoids scanning across thousands of categories (which can cause long runtimes and cURL timeouts).
+            $req_cat_id = isset($this->request->post['cat_id']) ? trim((string)$this->request->post['cat_id']) : '';
+
             // Server-side cursor: stored in settings so it resumes after reloads.
             $cursorRaw = $this->config->get('module_banggood_import_fetch_cursor');
-            $cursor = array('category_index' => 0, 'page' => 1, 'offset' => 0);
+            $cursor = array('category_index' => 0, 'page' => 1, 'offset' => 0, 'cat_id' => '');
             if (is_string($cursorRaw) && $cursorRaw !== '') {
                 $decoded = @json_decode($cursorRaw, true);
                 if (is_array($decoded)) {
                     $cursor['category_index'] = isset($decoded['category_index']) ? max(0, (int)$decoded['category_index']) : 0;
                     $cursor['page'] = isset($decoded['page']) ? max(1, (int)$decoded['page']) : 1;
                     $cursor['offset'] = isset($decoded['offset']) ? max(0, (int)$decoded['offset']) : 0;
+                    $cursor['cat_id'] = isset($decoded['cat_id']) ? (string)$decoded['cat_id'] : '';
                 }
             }
 
             $category_index = $cursor['category_index'];
             $page = $cursor['page'];
             $offset = $cursor['offset'];
+            $cursor_cat_id = isset($cursor['cat_id']) ? (string)$cursor['cat_id'] : '';
+
+            // If the UI requested a different category, reset cursor within that category.
+            if ($req_cat_id !== '' && $req_cat_id !== $cursor_cat_id) {
+                $category_index = 0;
+                $page = 1;
+                $offset = 0;
+                $cursor_cat_id = $req_cat_id;
+            }
 
             $fetchRows = function($shortTable) {
                 $fullTable = DB_PREFIX . $shortTable;
@@ -2036,12 +2050,17 @@ HTML;
                 }
             };
 
-            $rows = $fetchRows('bg_category');
-            if (!$rows) $rows = $fetchRows('bg_category_import');
-            if (empty($rows)) {
-                $json['error'] = 'No Banggood categories available to iterate.';
-                $this->response->setOutput(json_encode($json));
-                return;
+            // If a category id is supplied, fetch from that category only.
+            if ($req_cat_id !== '') {
+                $rows = array(array('cat_id' => $req_cat_id));
+            } else {
+                $rows = $fetchRows('bg_category');
+                if (!$rows) $rows = $fetchRows('bg_category_import');
+                if (empty($rows)) {
+                    $json['error'] = 'No Banggood categories available to iterate.';
+                    $this->response->setOutput(json_encode($json));
+                    return;
+                }
             }
 
             $total_categories = count($rows);
@@ -2221,7 +2240,12 @@ HTML;
             }
 
             // Save updated cursor back to settings so the next click continues where we left off.
-            $cursorNew = json_encode(array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset));
+            $cursorNew = json_encode(array(
+                'category_index' => (int)$next_category_index,
+                'page' => (int)$next_page,
+                'offset' => (int)$next_offset,
+                'cat_id' => $req_cat_id !== '' ? $req_cat_id : $cursor_cat_id
+            ));
             try {
                 if (method_exists($this->model_setting_setting, 'editSettingValue')) {
                     $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
@@ -2258,7 +2282,7 @@ HTML;
             $json['imported'] = (int)$imported;
             $json['import_errors'] = (int)$import_errors;
             $json['import_now'] = $import_now ? 1 : 0;
-            $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset);
+            $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset, 'cat_id' => ($req_cat_id !== '' ? $req_cat_id : $cursor_cat_id));
             $json['finished'] = (bool)$finished;
         } catch (\Exception $e) {
             $json = array('error' => 'fetchProductsChunk failed: ' . $e->getMessage());
@@ -2287,7 +2311,7 @@ HTML;
                 return;
             }
 
-            $cursorNew = json_encode(array('category_index' => 0, 'page' => 1, 'offset' => 0));
+            $cursorNew = json_encode(array('category_index' => 0, 'page' => 1, 'offset' => 0, 'cat_id' => ''));
             try {
                 if (method_exists($this->model_setting_setting, 'editSettingValue')) {
                     $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
