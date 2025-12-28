@@ -1055,6 +1055,8 @@ HTML;
         $json = array();
 
         try {
+            // Avoid PHP max_execution_time killing long Banggood API calls
+            @set_time_limit(0);
             if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
                 $json['error'] = $this->language->get('error_permission');
                 $this->response->setOutput(json_encode($json));
@@ -1159,6 +1161,8 @@ HTML;
         $json = array();
 
         try {
+            // Avoid PHP max_execution_time killing long Banggood API calls
+            @set_time_limit(0);
             if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
                 $json['error'] = $this->language->get('error_permission');
                 $this->response->setOutput(json_encode($json));
@@ -1892,6 +1896,8 @@ HTML;
         $json = array();
 
         try {
+            // Avoid PHP max_execution_time killing long Banggood API calls
+            @set_time_limit(0);
             if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
                 $json['error'] = $this->language->get('error_permission');
                 $this->response->setOutput(json_encode($json));

@@ -1204,7 +1204,9 @@ protected function apiRequestRawSimple($url) {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_TIMEOUT => 30,
+        CURLOPT_CONNECTTIMEOUT => (int)$this->getCurlConnectTimeoutSeconds(),
+        CURLOPT_TIMEOUT => (int)$this->getCurlTimeoutSeconds(),
+        CURLOPT_NOSIGNAL => 1,
         CURLOPT_USERAGENT => 'bg_category_import/1.0'
     ));
     $body = curl_exec($ch);
@@ -2253,6 +2255,27 @@ protected function apiRequestRawSimple($url) {
         return array_keys($arr) !== range(0, count($arr) - 1);
     }
 
+    /**
+     * cURL timeouts (seconds).
+     * IMPORTANT: "0" means infinite in cURL, but we avoid that by default to prevent stuck requests.
+     */
+    protected function getCurlTimeoutSeconds() {
+        $t = (int)$this->config->get('module_banggood_import_curl_timeout');
+        // Default: 180s (Banggood can be slow, and 30s causes frequent timeouts)
+        if ($t <= 0) $t = 180;
+        // Guardrail: don't allow absurdly low values
+        if ($t < 30) $t = 30;
+        return $t;
+    }
+
+    protected function getCurlConnectTimeoutSeconds() {
+        $t = (int)$this->config->get('module_banggood_import_curl_connect_timeout');
+        // Default: 20s (DNS/TLS can be slow on some hosting)
+        if ($t <= 0) $t = 20;
+        if ($t < 5) $t = 5;
+        return $t;
+    }
+
     protected function apiRequest($config, $task, $method = 'GET', $params = array()) {
         $access_token = $this->getAccessToken($config);
         if ($task !== 'getAccessToken') {
@@ -2263,7 +2286,7 @@ protected function apiRequestRawSimple($url) {
         $urlBase = rtrim($config['base_url'], '/') . '/';
         $url = $urlBase . ltrim($task, '/');
 
-        $attempt = 0; $maxAttempts = 2;
+        $attempt = 0; $maxAttempts = 3;
         do {
             $attempt++;
             $reqUrl = $url;
@@ -2278,16 +2301,44 @@ protected function apiRequestRawSimple($url) {
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, (int)$this->getCurlConnectTimeoutSeconds());
+            curl_setopt($ch, CURLOPT_TIMEOUT, (int)$this->getCurlTimeoutSeconds());
+            // Avoid signal-related issues with timeouts (esp. in some PHP builds)
+            if (defined('CURLOPT_NOSIGNAL')) curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
             if (strtoupper($method) === 'POST') {
                 curl_setopt($ch, CURLOPT_POST, 1);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&'));
             }
             $result = curl_exec($ch);
-            if ($result === false) { $err = curl_error($ch); curl_close($ch); throw new Exception('Banggood API curl error: ' . $err); }
+            if ($result === false) {
+                $errno = curl_errno($ch);
+                $err = curl_error($ch);
+                curl_close($ch);
+                // Retry transient network/timeouts
+                $transient = array(
+                    CURLE_OPERATION_TIMEDOUT,
+                    CURLE_COULDNT_CONNECT,
+                    CURLE_COULDNT_RESOLVE_HOST,
+                    CURLE_COULDNT_RESOLVE_PROXY,
+                    CURLE_RECV_ERROR,
+                    CURLE_SEND_ERROR,
+                    CURLE_GOT_NOTHING
+                );
+                if ($attempt < $maxAttempts && in_array($errno, $transient, true)) {
+                    usleep(300000);
+                    continue;
+                }
+                throw new Exception('Banggood API curl error: ' . $err);
+            }
             curl_close($ch);
             $data = json_decode($result, true);
-            if (!is_array($data)) { throw new Exception('Banggood API returned invalid JSON: ' . $result); }
+            if (!is_array($data)) {
+                if ($attempt < $maxAttempts) {
+                    usleep(200000);
+                    continue;
+                }
+                throw new Exception('Banggood API returned invalid JSON: ' . $result);
+            }
 
             if (isset($data['code']) && (int)$data['code'] === 21020 && $attempt < $maxAttempts) {
                 $this->clearAccessTokenCache();
@@ -2324,23 +2375,45 @@ protected function apiRequestRawSimple($url) {
             }
         }
 
-        if (strtoupper($method) === 'GET' && !empty($params)) $url .= (strpos($url, '?') === false ? '?' : '&') . http_build_query($params, '', '&');
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_HEADER, 0);
-        curl_setopt($ch, CURLOPT_USERAGENT, isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client');
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-        if (strtoupper($method) === 'POST') { curl_setopt($ch, CURLOPT_POST, 1); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&')); }
-        $result = curl_exec($ch);
-        if ($result === false) {
-            $err = curl_error($ch);
+        $attempt = 0; $maxAttempts = 3;
+        do {
+            $attempt++;
+            $reqUrl = $url;
+            if (strtoupper($method) === 'GET' && !empty($params)) $reqUrl .= (strpos($reqUrl, '?') === false ? '?' : '&') . http_build_query($params, '', '&');
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $reqUrl);
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            curl_setopt($ch, CURLOPT_USERAGENT, isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'OpenCart-Banggood-Client');
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, (int)$this->getCurlConnectTimeoutSeconds());
+            curl_setopt($ch, CURLOPT_TIMEOUT, (int)$this->getCurlTimeoutSeconds());
+            if (defined('CURLOPT_NOSIGNAL')) curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
+            if (strtoupper($method) === 'POST') { curl_setopt($ch, CURLOPT_POST, 1); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&')); }
+            $result = curl_exec($ch);
+            if ($result === false) {
+                $errno = curl_errno($ch);
+                $err = curl_error($ch);
+                curl_close($ch);
+                $transient = array(
+                    CURLE_OPERATION_TIMEDOUT,
+                    CURLE_COULDNT_CONNECT,
+                    CURLE_COULDNT_RESOLVE_HOST,
+                    CURLE_COULDNT_RESOLVE_PROXY,
+                    CURLE_RECV_ERROR,
+                    CURLE_SEND_ERROR,
+                    CURLE_GOT_NOTHING
+                );
+                if ($attempt < $maxAttempts && in_array($errno, $transient, true)) {
+                    usleep(300000);
+                    continue;
+                }
+                throw new Exception('Banggood API curl error: ' . $err);
+            }
             curl_close($ch);
-            throw new Exception('Banggood API curl error: ' . $err);
-        }
-        curl_close($ch);
+            break;
+        } while ($attempt < $maxAttempts);
 
         // Try decode JSON; if not JSON return raw string for callers that can handle it
         $data = json_decode($result, true);
