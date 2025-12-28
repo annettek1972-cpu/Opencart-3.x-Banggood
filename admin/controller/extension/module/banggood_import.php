@@ -1953,6 +1953,14 @@ HTML;
             $persisted = 0;
             $imported = 0;
             $import_errors = 0;
+            $last_fetch_error = '';
+
+            $extractApiCode = function($message) {
+                if (!is_string($message) || $message === '') return 0;
+                if (preg_match('/\bcode\s*=\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+                if (preg_match('/\bcode\s*:\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+                return 0;
+            };
 
             // Walk the global product list across categories, resuming from cursor.
             for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunk_size; $ci++) {
@@ -1967,8 +1975,27 @@ HTML;
 
                 while (count($collected) < $chunk_size) {
                     $res = $this->model_extension_module_banggood_import->fetchProductList($cat_id, $currentPage, $api_page_size);
-                    if (!$res || !empty($res['errors'])) {
-                        break;
+                    if (!$res) {
+                        $json['error'] = 'Failed to fetch product list (empty response).';
+                        $this->response->setOutput(json_encode($json));
+                        return;
+                    }
+                    if (!empty($res['errors'])) {
+                        $last_fetch_error = is_array($res['errors']) ? implode('; ', $res['errors']) : (string)$res['errors'];
+                        $code = $extractApiCode($last_fetch_error);
+                        if ($code === 41010) {
+                            $json['error'] = 'Banggood API rate limit (41010): You have exceeded the maximum number of calls. Please try again later (Banggood may require waiting up to 2 days).';
+                        } elseif ($code === 31010) {
+                            $json['error'] = 'Banggood API error (31010): Illegal request. Ensure the API is configured to allow your server IP.';
+                        } elseif ($code === 21020) {
+                            $json['error'] = 'Banggood API error (21020): Expired token. Try again (token will refresh), or re-check App ID/Secret.';
+                        } elseif ($code === 11020) {
+                            $json['error'] = 'Banggood API error (11020): access_token is empty. Check App ID/Secret configuration.';
+                        } else {
+                            $json['error'] = $last_fetch_error !== '' ? $last_fetch_error : 'Banggood API returned an error.';
+                        }
+                        $this->response->setOutput(json_encode($json));
+                        return;
                     }
 
                     $products = !empty($res['products']) && is_array($res['products']) ? $res['products'] : array();
@@ -2017,6 +2044,14 @@ HTML;
 
             if ($next_category_index >= $total_categories) {
                 $finished = true;
+            }
+
+            // If we didn't collect anything, fail fast with the last seen API error (if any),
+            // otherwise return a helpful message (prevents "infinite spinner" when API blocks calls).
+            if (empty($collected) && $last_fetch_error !== '') {
+                $json['error'] = $last_fetch_error;
+                $this->response->setOutput(json_encode($json));
+                return;
             }
 
             // Persist fetched products into bg_fetched_products (controller-side, guaranteed).

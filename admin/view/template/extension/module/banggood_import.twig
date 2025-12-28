@@ -891,6 +891,7 @@ $('#btn-fetch-chunk').on('click', function(e){
     url: fetchChunkUrl,
     type: 'post',
     dataType: 'json',
+    timeout: 60000,
     data: {
       chunk_size: count
     },
@@ -915,7 +916,11 @@ $('#btn-fetch-chunk').on('click', function(e){
       if (json.html) $panel.append(json.html);
     },
     error: function(xhr, status, err) {
-      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      if (status === 'timeout') {
+        $panel.html('<div class="alert alert-danger">Fetch timed out (60s). The server may be blocked by Banggood rate limits or stuck processing. Please try again later.</div>');
+      } else {
+        $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      }
     },
     complete: function() {
       $btn.prop('disabled', false);
