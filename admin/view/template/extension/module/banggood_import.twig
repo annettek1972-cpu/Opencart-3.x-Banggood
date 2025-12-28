@@ -434,32 +434,6 @@ var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'oth
 // Track selected Banggood category id for Fetch (so we don't scan all categories).
 var bgSelectedCatId = '';
 
-// Auto-select a category so Fetch works without extra clicks (legacy behavior).
-// Prefer a leaf node (no children) because Banggood can return 12022 for parent categories.
-function bgAutoSelectFirstCategoryIfNeeded() {
-  try {
-    var $tree = $('#banggood-categories');
-    if (!$tree.length) return;
-
-    // If already selected, keep it.
-    var $sel = $tree.find('.cat-label.selected, .bg-label.selected').first();
-    if ($sel.length) {
-      var cidExisting = $sel.attr('data-cat-id') || $sel.closest('li').attr('data-bg-id') || $sel.closest('li').attr('data-id') || '';
-      if (!cidExisting) {
-        var badge = $sel.find('.bg-id');
-        if (badge && badge.length) cidExisting = badge.data('bg-id') || badge.attr('data-bg-id') || '';
-      }
-      if (cidExisting) bgSelectedCatId = String(cidExisting);
-      return;
-    }
-
-    // Choose first leaf category (no children) if possible
-    var $leaf = $tree.find('li.bg-node:not(.has-children) > .bg-label').first();
-    var $pick = $leaf.length ? $leaf : $tree.find('li.bg-node > .bg-label').first();
-    if ($pick.length) $pick.trigger('click');
-  } catch (e) {}
-}
-
 // Persisted queue pagination state (AJAX)
 var bgQueuePage = 1;
 var bgQueueLimit = 50;
@@ -688,8 +662,6 @@ function initBanggoodCategoryTree() {
     setTimeout(function(){ $b.css('background-color', orig); }, 600);
   });
 
-  // Ensure a category is selected on initial load (legacy behavior)
-  bgAutoSelectFirstCategoryIfNeeded();
 }
 
 // Ensure controls exist and wire search / expand / collapse (will not duplicate controls)
@@ -816,7 +788,6 @@ $('#btn-update-categories').off('click').on('click', function(e){
         // Our earlier guard prevents duplication by not injecting duplicate controls if controller already emitted them.
         $('#banggood-categories').html(json.html);
         initBanggoodCategoryTree();
-        bgAutoSelectFirstCategoryIfNeeded();
       }
     },
     error: function(xhr, ajaxOptions, thrownError) {
@@ -967,12 +938,8 @@ $('#btn-fetch-chunk').on('click', function(e){
     url: fetchChunkUrl,
     type: 'post',
     dataType: 'json',
-    timeout: 60000,
     data: {
-      chunk_size: count,
-      import_now: 0,
-      // Prefer fetching from the currently selected category to avoid scanning across all categories (slow + can timeout).
-      cat_id: bgSelectedCatId
+      chunk_size: count
     },
     success: function(json) {
       if (json.error) {
@@ -983,8 +950,7 @@ $('#btn-fetch-chunk').on('click', function(e){
         // continue, we still render the DB list below
       }
       if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
-        var msg = 'Queued: ' + (json.persisted || 0);
-        msg += ' • Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+        var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
         if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
         if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
           msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
@@ -996,11 +962,7 @@ $('#btn-fetch-chunk').on('click', function(e){
       if (json.html) $panel.append(json.html);
     },
     error: function(xhr, status, err) {
-      if (status === 'timeout') {
-        $panel.html('<div class="alert alert-danger">Fetch timed out (60s). The server may be blocked by Banggood rate limits or stuck processing. Please try again later.</div>');
-      } else {
-        $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
-      }
+      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
     },
     complete: function() {
       $btn.prop('disabled', false);
@@ -1168,7 +1130,6 @@ $(document).ready(function() {
 
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
-    bgAutoSelectFirstCategoryIfNeeded();
   }
 
   // Auto-refresh persisted products queue so import status badges update live.
