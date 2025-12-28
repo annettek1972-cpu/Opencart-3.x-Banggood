@@ -2042,15 +2042,22 @@ HTML;
 
             /**
              * IMPORTANT:
-             * If there are already pending rows in oc_bg_fetched_products, process them FIRST.
-             * This prevents the queue from accumulating "pending" rows that never get imported.
+             * If there are already pending rows in oc_bg_fetched_products, process them FIRST (drain queue).
+             * Only after the pending queue is empty do we fetch/import any new products.
              */
             try {
                 if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
-                    $rowsToProcess = $this->model_extension_module_banggood_import->fetchPendingForProcessing($chunk_size);
-                    if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
-                        $imported = 0;
-                        $import_errors = 0;
+                    $pending_imported = 0;
+                    $pending_import_errors = 0;
+
+                    // Drain in batches to avoid giant single queries, but keep going until queue is empty.
+                    $batchLimit = max($chunk_size, 50);
+                    if ($batchLimit > 200) $batchLimit = 200;
+                    $maxTotal = 2000; // safety cap per click
+
+                    while ($pending_imported + $pending_import_errors < $maxTotal) {
+                        $rowsToProcess = $this->model_extension_module_banggood_import->fetchPendingForProcessing($batchLimit);
+                        if (!is_array($rowsToProcess) || empty($rowsToProcess)) break;
 
                         foreach ($rowsToProcess as $row) {
                             $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
@@ -2060,24 +2067,20 @@ HTML;
                                 if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
                                     $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
                                 }
-                                $imported++;
+                                $pending_imported++;
                             } catch (\Throwable $e) {
                                 if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
                                     $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
                                 }
-                                $import_errors++;
+                                $pending_import_errors++;
                             }
                         }
+                    }
 
-                        // Return the refreshed DB list (pending-first ordering is applied in renderFetchedProductsList())
-                        list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
-                        $json['success'] = true;
-                        $json['imported'] = (int)$imported;
-                        $json['import_errors'] = (int)$import_errors;
-                        $json['persisted'] = 0;
-                        $json['html'] = $html;
-                        $this->response->setOutput(json_encode($json));
-                        return;
+                    // If we processed any pending, include them in the final response counters.
+                    if ($pending_imported || $pending_import_errors) {
+                        $imported = (int)$pending_imported;
+                        $import_errors = (int)$pending_import_errors;
                     }
                 }
             } catch (\Throwable $e) {

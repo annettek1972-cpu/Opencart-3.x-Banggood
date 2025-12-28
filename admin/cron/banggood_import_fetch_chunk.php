@@ -317,23 +317,29 @@ try {
 $collected = [];
 
 // Process existing pending queue first (before fetching anything new)
-$rowsToProcess = [];
-if (method_exists($bgModel, 'fetchPendingForProcessing')) {
+$imported = 0;
+$import_errors = 0;
+$firstError = '';
+$created = 0;
+$updated = 0;
+$skipped = 0;
+$claimed = 0;
+
+// Drain pending queue first (loop until empty), then continue to fetch new items.
+$maxTotalPending = 2000; // safety cap per cron invocation
+$pendingBatch = $chunkSize;
+if ($pendingBatch < 50) $pendingBatch = 50;
+if ($pendingBatch > 200) $pendingBatch = 200;
+
+while ($claimed < $maxTotalPending && method_exists($bgModel, 'fetchPendingForProcessing')) {
     try {
-        $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
+        $rowsToProcess = $bgModel->fetchPendingForProcessing($pendingBatch);
     } catch (Throwable $e) {
         $rowsToProcess = [];
     }
-}
+    if (!is_array($rowsToProcess) || empty($rowsToProcess)) break;
 
-if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
-    $claimed = count($rowsToProcess);
-    $imported = 0;
-    $import_errors = 0;
-    $firstError = '';
-    $created = 0;
-    $updated = 0;
-    $skipped = 0;
+    $claimed += count($rowsToProcess);
 
     foreach ($rowsToProcess as $row) {
         $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
@@ -395,20 +401,6 @@ if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
             if ($verbose) fwrite(STDERR, "ERROR(pending-first) bg_product_id={$pid} " . $e->getMessage() . "\n");
         }
     }
-
-    // Output and exit: pending-first run does not advance fetch cursor
-    $out = [
-        'mode' => 'pending-first',
-        'claimed' => (int)$claimed,
-        'imported' => (int)$imported,
-        'import_errors' => (int)$import_errors,
-        'created' => (int)$created,
-        'updated' => (int)$updated,
-        'skipped' => (int)$skipped,
-        'error' => ($firstError !== '' ? $firstError : null),
-    ];
-    fwrite(STDOUT, json_encode($out, JSON_UNESCAPED_SLASHES) . "\n");
-    exit($import_errors > 0 ? 2 : 0);
 }
 
     $next_category_index = $category_index;
