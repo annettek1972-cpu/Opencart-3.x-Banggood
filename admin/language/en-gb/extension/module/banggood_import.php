@@ -34,6 +34,12 @@ $_['help_delete_missing']       = 'When enabled, categories that no longer exist
 $_['entry_overwrite_option_images'] = 'Overwrite option images';
 $_['help_overwrite_option_images']  = 'When enabled, Banggood POA images will overwrite existing OpenCart option value images during import.';
 
+// New: timeouts
+$_['entry_curl_timeout'] = 'Banggood API timeout (seconds)';
+$_['help_curl_timeout']  = 'Maximum time to wait for a Banggood API response. Increase this if fetch/import times out (recommended 180–600).';
+$_['entry_curl_connect_timeout'] = 'Banggood API connect timeout (seconds)';
+$_['help_curl_connect_timeout']  = 'Maximum time to wait for the connection to be established (DNS/TLS). Increase this on slow hosting (recommended 20–60).';
+
 // New: product updates
 $_['entry_update_minutes']      = 'Updated in last (minutes)';
 $_['help_update_minutes']       = 'Range in minutes (max 21600 = 15 days).';

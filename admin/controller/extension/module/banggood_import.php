@@ -253,7 +253,9 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             'entry_app_secret', 'entry_api_key', 'entry_default_language', 'entry_default_currency', 'entry_category_id',
             'entry_max_products', 'entry_product_url', 'button_import_category', 'button_import_product_url',
             'entry_delete_missing', 'help_delete_missing',
-            'entry_overwrite_option_images', 'help_overwrite_option_images'
+            'entry_overwrite_option_images', 'help_overwrite_option_images',
+            'entry_curl_timeout', 'help_curl_timeout',
+            'entry_curl_connect_timeout', 'help_curl_connect_timeout'
         ] as $k) {
             $data[$k] = $this->language->get($k);
         }
@@ -317,7 +319,9 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             'module_banggood_import_default_language',
             'module_banggood_import_default_currency',
             'module_banggood_import_delete_missing', // NEW checkbox
-            'module_banggood_import_overwrite_option_images' // overwrite POA option images
+            'module_banggood_import_overwrite_option_images', // overwrite POA option images
+            'module_banggood_import_curl_timeout', // NEW: API request timeout (seconds)
+            'module_banggood_import_curl_connect_timeout' // NEW: connect timeout (seconds)
         ];
         foreach ($fields as $field) {
             $data[$field] = isset($this->request->post[$field])
@@ -332,6 +336,12 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         }
         if (empty($data['module_banggood_import_default_currency'])) {
             $data['module_banggood_import_default_currency'] = 'USD';
+        }
+        if (empty($data['module_banggood_import_curl_timeout'])) {
+            $data['module_banggood_import_curl_timeout'] = 180;
+        }
+        if (empty($data['module_banggood_import_curl_connect_timeout'])) {
+            $data['module_banggood_import_curl_connect_timeout'] = 20;
         }
 
         $data['banggood_import_log'] = isset($this->session->data['banggood_import_log'])
