@@ -50,7 +50,7 @@
     return out;
   }
 
-  function reorderRowsNewestFirst() {
+  function reorderRowsPendingThenNewest() {
     var $list = $('#banggood-products .bg-fetched-list');
     if (!$list.length) return;
 
@@ -59,12 +59,16 @@
 
     var items = $rows.get().map(function (el) {
       var $el = $(el);
+      var status = String(($el.find('.bg-status-badge').attr('data-status') || '')).toLowerCase();
+      var pending = status === 'pending';
       var fetchedTs = parseInt($el.attr('data-fetched-at-ts') || '0', 10) || 0;
       var rowId = parseInt($el.attr('data-row-id') || '0', 10) || 0;
-      return { el: el, fetchedTs: fetchedTs, rowId: rowId };
+      return { el: el, pending: pending, fetchedTs: fetchedTs, rowId: rowId };
     });
 
     items.sort(function (a, b) {
+      // pending first
+      if (a.pending !== b.pending) return a.pending ? -1 : 1;
       // newest fetched_at first
       if (a.fetchedTs !== b.fetchedTs) return b.fetchedTs - a.fetchedTs;
       // then newest id first
@@ -120,7 +124,7 @@
       success: function (json) {
         if (!json || json.error || !json.statuses) return;
         updateBadgesInPlace(json.statuses);
-        reorderRowsNewestFirst();
+        reorderRowsPendingThenNewest();
       }
     });
   }
