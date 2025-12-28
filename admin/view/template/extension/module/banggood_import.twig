@@ -936,7 +936,8 @@ $('#btn-fetch-chunk').on('click', function(e){
     dataType: 'json',
     timeout: 60000,
     data: {
-      chunk_size: count
+      chunk_size: count,
+      import_now: 0
     },
     success: function(json) {
       if (json.error) {
@@ -947,7 +948,8 @@ $('#btn-fetch-chunk').on('click', function(e){
         // continue, we still render the DB list below
       }
       if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
-        var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+        var msg = 'Queued: ' + (json.persisted || 0);
+        msg += ' • Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
         if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
         if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
           msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);

@@ -1996,6 +1996,9 @@ HTML;
             }
 
             $chunk_size = isset($this->request->post['chunk_size']) ? max(1, (int)$this->request->post['chunk_size']) : 10;
+            // IMPORTANT: importing inside the same request can be very slow (images/stocks/variants).
+            // Default to queue-only so "Fetch" stays responsive. Set import_now=1 to force synchronous import.
+            $import_now = !empty($this->request->post['import_now']) && (int)$this->request->post['import_now'] === 1;
 
             // Server-side cursor: stored in settings so it resumes after reloads.
             $cursorRaw = $this->config->get('module_banggood_import_fetch_cursor');
@@ -2198,20 +2201,22 @@ HTML;
                 return;
             }
 
-            foreach ($collected as $p) {
-                $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
-                if ($pid === '') continue;
-                try {
-                    $this->model_extension_module_banggood_import->importProductById($pid);
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
+            if ($import_now) {
+                foreach ($collected as $p) {
+                    $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
+                    if ($pid === '') continue;
+                    try {
+                        $this->model_extension_module_banggood_import->importProductById($pid);
+                        if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
+                            $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
+                        }
+                        $imported++;
+                    } catch (\Throwable $e) {
+                        if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
+                            $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
+                        }
+                        $import_errors++;
                     }
-                    $imported++;
-                } catch (\Throwable $e) {
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
-                    }
-                    $import_errors++;
                 }
             }
 
@@ -2252,6 +2257,7 @@ HTML;
             $json['persist_total'] = $persist_total;
             $json['imported'] = (int)$imported;
             $json['import_errors'] = (int)$import_errors;
+            $json['import_now'] = $import_now ? 1 : 0;
             $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset);
             $json['finished'] = (bool)$finished;
         } catch (\Exception $e) {
