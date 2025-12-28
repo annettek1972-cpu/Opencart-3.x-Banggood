@@ -426,6 +426,37 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_fetched_products_total'] = (int)$total_count;
         // --- End: render persisted fetched products for initial view (compact one-line rows) ---
 
+        // --- Start: cron last-run status + sticky last-error (written by cron/banggood_import_fetch_chunk.php) ---
+        $cronStatus = null;
+        $cronLastError = null;
+        try {
+            $cronRaw = $this->config->get('module_banggood_import_cron_last_status');
+            if (is_string($cronRaw) && $cronRaw !== '') {
+                $decoded = @json_decode($cronRaw, true);
+                if (is_array($decoded)) $cronStatus = $decoded;
+            } elseif (is_array($cronRaw)) {
+                $cronStatus = $cronRaw;
+            }
+            $errRaw = $this->config->get('module_banggood_import_cron_last_error');
+            if (is_string($errRaw) && $errRaw !== '') {
+                $decodedE = @json_decode($errRaw, true);
+                if (is_array($decodedE)) $cronLastError = $decodedE;
+            } elseif (is_array($errRaw)) {
+                $cronLastError = $errRaw;
+            }
+        } catch (\Throwable $e) {
+            $cronStatus = null;
+            $cronLastError = null;
+        }
+        $data['bg_cron_status'] = $cronStatus;
+        $data['bg_cron_last_error'] = $cronLastError;
+        $data['get_cron_status_url'] = $this->url->link(
+            'extension/module/banggood_import/getCronStatus',
+            'user_token=' . $this->session->data['user_token'],
+            true
+        );
+        // --- End: cron last-run status ---
+
         // Expose update URL for JS (clean URL generation)
         $data['update_categories_url'] = $this->url->link(
             'extension/module/banggood_import/updateCategories',
@@ -1410,6 +1441,72 @@ HTML;
     }
 
     /**
+     * AJAX: getCronStatus
+     *
+     * Returns the last cron run status stored in settings by cron/banggood_import_fetch_chunk.php.
+     */
+    public function getCronStatus() {
+        $this->load->language('extension/module/banggood_import');
+        $this->load->model('setting/setting');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $raw = null;
+            $rawErr = null;
+            try {
+                $settings = $this->model_setting_setting->getSetting('module_banggood_import');
+                if (is_array($settings) && isset($settings['module_banggood_import_cron_last_status'])) {
+                    $raw = $settings['module_banggood_import_cron_last_status'];
+                }
+                if (is_array($settings) && isset($settings['module_banggood_import_cron_last_error'])) {
+                    $rawErr = $settings['module_banggood_import_cron_last_error'];
+                }
+            } catch (\Throwable $e) {
+                $raw = null;
+                $rawErr = null;
+            }
+            if ($raw === null) {
+                $raw = $this->config->get('module_banggood_import_cron_last_status');
+            }
+            if ($rawErr === null) {
+                $rawErr = $this->config->get('module_banggood_import_cron_last_error');
+            }
+
+            $status = null;
+            if (is_string($raw) && $raw !== '') {
+                $decoded = @json_decode($raw, true);
+                if (is_array($decoded)) $status = $decoded;
+            } elseif (is_array($raw)) {
+                $status = $raw;
+            }
+
+            $last_error = null;
+            if (is_string($rawErr) && $rawErr !== '') {
+                $decodedE = @json_decode($rawErr, true);
+                if (is_array($decodedE)) $last_error = $decodedE;
+            } elseif (is_array($rawErr)) {
+                $last_error = $rawErr;
+            }
+
+            $json['success'] = true;
+            $json['status'] = $status;
+            $json['last_error'] = $last_error;
+        } catch (\Throwable $e) {
+            $json['error'] = 'getCronStatus failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
      * AJAX: importProductById
      *
      * Imports a product by Banggood product_id (calls model importProductById()).
@@ -1929,7 +2026,29 @@ HTML;
                     $idCol = null;
                     foreach ($idCandidates as $c) if (in_array($c, $available)) { $idCol = $c; break; }
                     if (!$idCol) return array();
-                    $qr = $this->db->query("SELECT `" . $this->db->escape($idCol) . "` AS cat_id FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`");
+
+                    // Prefer leaf categories only (avoids Banggood 12022 errors and speeds up global fetch)
+                    $parentCandidates = ['parent_id','parent_cat_id','parent','parentId'];
+                    $parentCol = null;
+                    foreach ($parentCandidates as $c) if (in_array($c, $available)) { $parentCol = $c; break; }
+
+                    if ($parentCol) {
+                        // leaf = id not present as someone else's parent (exclude 0/NULL/'')
+                        $qr = $this->db->query(
+                            "SELECT `" . $this->db->escape($idCol) . "` AS cat_id
+                             FROM `" . $this->db->escape($fullTable) . "`
+                             WHERE `" . $this->db->escape($idCol) . "` NOT IN (
+                               SELECT DISTINCT `" . $this->db->escape($parentCol) . "`
+                               FROM `" . $this->db->escape($fullTable) . "`
+                               WHERE `" . $this->db->escape($parentCol) . "` IS NOT NULL
+                                 AND `" . $this->db->escape($parentCol) . "` <> ''
+                                 AND `" . $this->db->escape($parentCol) . "` <> '0'
+                             )
+                             ORDER BY `" . $this->db->escape($idCol) . "`"
+                        );
+                    } else {
+                        $qr = $this->db->query("SELECT `" . $this->db->escape($idCol) . "` AS cat_id FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`");
+                    }
                     return $qr->rows;
                 } catch (\Throwable $e) {
                     return array();
@@ -1953,6 +2072,14 @@ HTML;
             $persisted = 0;
             $imported = 0;
             $import_errors = 0;
+            $last_fetch_error = '';
+
+            $extractApiCode = function($message) {
+                if (!is_string($message) || $message === '') return 0;
+                if (preg_match('/\bcode\s*=\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+                if (preg_match('/\bcode\s*:\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+                return 0;
+            };
 
             // Walk the global product list across categories, resuming from cursor.
             for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunk_size; $ci++) {
@@ -1967,8 +2094,33 @@ HTML;
 
                 while (count($collected) < $chunk_size) {
                     $res = $this->model_extension_module_banggood_import->fetchProductList($cat_id, $currentPage, $api_page_size);
-                    if (!$res || !empty($res['errors'])) {
-                        break;
+                    if (!$res) {
+                        $json['error'] = 'Failed to fetch product list (empty response).';
+                        $this->response->setOutput(json_encode($json));
+                        return;
+                    }
+                    if (!empty($res['errors'])) {
+                        $last_fetch_error = is_array($res['errors']) ? implode('; ', $res['errors']) : (string)$res['errors'];
+                        $code = $extractApiCode($last_fetch_error);
+                        if ($code === 41010) {
+                            $json['error'] = 'Banggood API rate limit (41010): You have exceeded the maximum number of calls. Please try again later (Banggood may require waiting up to 2 days).';
+                        } elseif ($code === 12022) {
+                            // 12022 is common for parent categories; skip it and move to next category (legacy behavior).
+                            break;
+                        } elseif ($code === 31010) {
+                            $json['error'] = 'Banggood API error (31010): Illegal request. Ensure the API is configured to allow your server IP.';
+                        } elseif ($code === 21020) {
+                            $json['error'] = 'Banggood API error (21020): Expired token. Try again (token will refresh), or re-check App ID/Secret.';
+                        } elseif ($code === 11020) {
+                            $json['error'] = 'Banggood API error (11020): access_token is empty. Check App ID/Secret configuration.';
+                        } else {
+                            $json['error'] = $last_fetch_error !== '' ? $last_fetch_error : 'Banggood API returned an error.';
+                        }
+                        // If we set a real error, return immediately; otherwise we broke out to skip 12022.
+                        if (!empty($json['error'])) {
+                            $this->response->setOutput(json_encode($json));
+                            return;
+                        }
                     }
 
                     $products = !empty($res['products']) && is_array($res['products']) ? $res['products'] : array();
@@ -2017,6 +2169,14 @@ HTML;
 
             if ($next_category_index >= $total_categories) {
                 $finished = true;
+            }
+
+            // If we didn't collect anything, fail fast with the last seen API error (if any),
+            // otherwise return a helpful message (prevents "infinite spinner" when API blocks calls).
+            if (empty($collected) && $last_fetch_error !== '') {
+                $json['error'] = $last_fetch_error;
+                $this->response->setOutput(json_encode($json));
+                return;
             }
 
             // Persist fetched products into bg_fetched_products (controller-side, guaranteed).
