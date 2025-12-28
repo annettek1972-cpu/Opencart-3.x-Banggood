@@ -188,31 +188,11 @@ try {
 try {
     // OpenCart Log expects a filename (it prepends DIR_LOGS internally).
     // If error_filename is empty/misconfigured, Log would try to fopen() a directory and warn.
-    $logFile = (string)$config->get('error_filename');
-    $logFile = trim($logFile);
-    if ($logFile === '' || substr($logFile, -1) === '/' || substr($logFile, -1) === '\\') {
-        $logFile = 'banggood_cron.log';
-    }
-    // If the log path isn't writable (common when previous runs were as root), avoid warnings by using a null logger.
-    $canLog = true;
-    if (defined('DIR_LOGS')) {
-        $logDir = (string)DIR_LOGS;
-        $logPath = rtrim($logDir, '/\\') . DIRECTORY_SEPARATOR . $logFile;
-        if (!is_dir($logDir) || !is_writable($logDir)) {
-            $canLog = false;
-        } elseif (file_exists($logPath) && !is_writable($logPath)) {
-            $canLog = false;
-        }
-    }
-
-    if ($canLog) {
-        $registry->set('log', new Log($logFile));
-    } else {
-        // Minimal logger compatible with `$this->log->write(...)` calls in OC models.
-        $registry->set('log', new class {
-            public function write($message) { /* no-op */ }
-        });
-    }
+    // Disabled to avoid creating/expanding cron log files on disk.
+    // Minimal logger compatible with `$this->log->write(...)` calls in OC models.
+    $registry->set('log', new class {
+        public function write($message) { /* no-op */ }
+    });
 } catch (Throwable $e) {
     // ignore
 }
@@ -288,6 +268,38 @@ try {
     /** @var ModelSettingSetting $settingModel */
     $settingModel = $registry->get('model_setting_setting');
 
+    // Persist last cron status so admin UI can show it
+    $bg_extract_code = function(string $message): int {
+        if ($message === '') return 0;
+        if (preg_match('/\bcode\s*=\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+        if (preg_match('/\bcode\s*:\s*(\d+)\b/i', $message, $m)) return (int)$m[1];
+        return 0;
+    };
+
+    $bg_write_setting_value = function(string $key, $value) use ($settingModel) {
+        try {
+            if (method_exists($settingModel, 'editSettingValue')) {
+                $settingModel->editSettingValue('module_banggood_import', $key, $value);
+            } else {
+                $cur = $settingModel->getSetting('module_banggood_import');
+                if (!is_array($cur)) $cur = [];
+                $cur[$key] = $value;
+                $settingModel->editSetting('module_banggood_import', $cur);
+            }
+        } catch (Throwable $e) {
+            // ignore - cron should still output to CLI
+        }
+    };
+
+    $bg_write_cron_status = function(array $payload) use ($bg_write_setting_value) {
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        $bg_write_setting_value('module_banggood_import_cron_last_status', $json);
+        // If this status is a failure, also persist a sticky "last error" record
+        if (isset($payload['ok']) && $payload['ok'] === false) {
+            $bg_write_setting_value('module_banggood_import_cron_last_error', $json);
+        }
+    };
+
     if ($resetCursor) {
         $cursorNew = json_encode(['category_index' => 0, 'page' => 1, 'offset' => 0]);
         if (method_exists($settingModel, 'editSettingValue')) {
@@ -309,6 +321,13 @@ try {
     $rows = bg_fetch_category_rows($db, 'bg_category');
     if (!$rows) $rows = bg_fetch_category_rows($db, 'bg_category_import');
     if (!$rows) {
+        $bg_write_cron_status([
+            'ran_at' => gmdate('c'),
+            'ok' => false,
+            'source' => 'cron',
+            'chunk_size' => $chunkSize,
+            'message' => 'No Banggood categories available to iterate (bg_category / bg_category_import empty).',
+        ]);
         fwrite(STDERR, "No Banggood categories available to iterate (bg_category / bg_category_import empty).\n");
         exit(2);
     }
@@ -323,6 +342,8 @@ try {
 
     // Banggood docs: 20 products max per page.
     $api_page_size = 20;
+    $fetchError = '';
+    $fetchErrorCode = 0;
 
     for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunkSize; $ci++) {
         $cat_id = isset($rows[$ci]['cat_id']) ? (string)$rows[$ci]['cat_id'] : '';
@@ -334,8 +355,15 @@ try {
 
         while (count($collected) < $chunkSize) {
             $res = $bgModel->fetchProductList($cat_id, $currentPage, $api_page_size);
-            if (!$res || (!empty($res['errors']) && is_array($res['errors']))) {
-                break;
+            if (!$res) {
+                $fetchError = 'Failed to fetch product list (empty response).';
+                break 2;
+            }
+            if (!empty($res['errors'])) {
+                $fetchError = is_array($res['errors']) ? implode('; ', $res['errors']) : (string)$res['errors'];
+                $fetchErrorCode = $bg_extract_code($fetchError);
+                // Fail fast: do NOT continue iterating categories when Banggood is rejecting requests
+                break 2;
             }
 
             $products = (!empty($res['products']) && is_array($res['products'])) ? $res['products'] : [];
@@ -379,6 +407,28 @@ try {
         $next_category_index = $ci + 1;
         $next_page = 1;
         $next_offset = 0;
+    }
+
+    // If we hit a Banggood/API error while fetching, stop immediately so cron doesn't "run forever".
+    if ($fetchError !== '') {
+        $cursorNew = json_encode(['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset]);
+        $bg_write_cron_status([
+            'ran_at' => gmdate('c'),
+            'ok' => false,
+            'source' => 'cron',
+            'chunk_size' => (int)$chunkSize,
+            'fetched' => (int)count($collected),
+            'persisted' => 0,
+            'claimed' => 0,
+            'imported' => 0,
+            'errors' => 1,
+            'first_error' => $fetchError,
+            'api_code' => (int)$fetchErrorCode,
+            'finished' => false,
+            'next_cursor' => $cursorNew,
+        ]);
+        fwrite(STDERR, "Banggood fetch error" . ($fetchErrorCode ? " (code={$fetchErrorCode})" : "") . ": {$fetchError}\n");
+        exit(3);
     }
 
     if ($next_category_index >= $total_categories) {
@@ -487,8 +537,33 @@ try {
         }
     }
 
-    // Save updated cursor
+    // Compute and persist next cursor (also included in cron status)
     $cursorNew = json_encode(['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset]);
+
+    // Persist cron status for admin UI visibility
+    $api_code = $firstError !== '' ? $bg_extract_code($firstError) : 0;
+    $bg_write_cron_status([
+        'ran_at' => gmdate('c'),
+        'ok' => ($import_errors === 0),
+        'source' => 'cron',
+        'chunk_size' => (int)$chunkSize,
+        'import_mode' => $importMode,
+        'ensure_variants' => (bool)$ensureVariants,
+        'fetched' => (int)count($collected),
+        'persisted' => (int)$persisted,
+        'claimed' => (int)$claimed,
+        'imported' => (int)$imported,
+        'created' => (int)$created,
+        'updated' => (int)$updated,
+        'skipped' => (int)$skipped,
+        'errors' => (int)$import_errors,
+        'first_error' => $firstError,
+        'api_code' => (int)$api_code,
+        'finished' => (bool)$finished,
+        'next_cursor' => $cursorNew,
+    ]);
+
+    // Save updated cursor
     if (method_exists($settingModel, 'editSettingValue')) {
         $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
     } else {
@@ -513,6 +588,23 @@ try {
     // exit code: non-zero if we imported nothing due to errors/fetch issue is not necessarily failure
     exit(0);
 } catch (Throwable $e) {
+    // Best-effort: write failing status if we can reach setting model
+    try {
+        if (isset($settingModel) && isset($bg_write_cron_status) && is_callable($bg_write_cron_status)) {
+            $msg = $e->getMessage();
+            $code = isset($bg_extract_code) && is_callable($bg_extract_code) ? (int)$bg_extract_code($msg) : 0;
+            $bg_write_cron_status([
+                'ran_at' => gmdate('c'),
+                'ok' => false,
+                'source' => 'cron',
+                'chunk_size' => (int)$chunkSize,
+                'message' => 'Cron failed: ' . $msg,
+                'api_code' => (int)$code,
+            ]);
+        }
+    } catch (Throwable $x) {
+        // ignore
+    }
     fwrite(STDERR, "Cron failed: " . $e->getMessage() . "\n");
     exit(1);
 }
