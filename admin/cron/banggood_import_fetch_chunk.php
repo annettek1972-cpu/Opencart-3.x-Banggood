@@ -325,21 +325,18 @@ $updated = 0;
 $skipped = 0;
 $claimed = 0;
 
-// Drain pending queue first (loop until empty), then continue to fetch new items.
-$maxTotalPending = 2000; // safety cap per cron invocation
-$pendingBatch = $chunkSize;
-if ($pendingBatch < 50) $pendingBatch = 50;
-if ($pendingBatch > 200) $pendingBatch = 200;
-
-while ($claimed < $maxTotalPending && method_exists($bgModel, 'fetchPendingForProcessing')) {
+// If pending rows exist, process them first and exit (do not fetch new in same run).
+$rowsToProcess = [];
+if (method_exists($bgModel, 'fetchPendingForProcessing')) {
     try {
-        $rowsToProcess = $bgModel->fetchPendingForProcessing($pendingBatch);
+        $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
     } catch (Throwable $e) {
         $rowsToProcess = [];
     }
-    if (!is_array($rowsToProcess) || empty($rowsToProcess)) break;
+}
 
-    $claimed += count($rowsToProcess);
+if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
+    $claimed = count($rowsToProcess);
 
     foreach ($rowsToProcess as $row) {
         $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
@@ -401,6 +398,19 @@ while ($claimed < $maxTotalPending && method_exists($bgModel, 'fetchPendingForPr
             if ($verbose) fwrite(STDERR, "ERROR(pending-first) bg_product_id={$pid} " . $e->getMessage() . "\n");
         }
     }
+
+    $out = [
+        'mode' => 'pending-first',
+        'claimed' => (int)$claimed,
+        'imported' => (int)$imported,
+        'import_errors' => (int)$import_errors,
+        'created' => (int)$created,
+        'updated' => (int)$updated,
+        'skipped' => (int)$skipped,
+        'error' => ($firstError !== '' ? $firstError : null),
+    ];
+    fwrite(STDOUT, json_encode($out, JSON_UNESCAPED_SLASHES) . "\n");
+    exit($import_errors > 0 ? 2 : 0);
 }
 
     $next_category_index = $category_index;
