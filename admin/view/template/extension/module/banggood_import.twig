@@ -80,19 +80,21 @@
 
           <div class="col-md-8">
             {# Buttons moved to top of products column and sized like Update Categories #}
-            <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
-              <div id="bg-cron-status" class="text-muted" style="margin-right:auto; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55%;">
+            <div id="bg-cron-status-wrap" style="margin-bottom:8px;">
+              <div id="bg-cron-status" class="text-muted" style="font-size:12px; white-space:normal; overflow-wrap:anywhere;">
                 {% if bg_cron_status %}
                   <span><strong>Cron:</strong> {{ bg_cron_status.ran_at|default('unknown') }} • {% if bg_cron_status.ok %}<span style="color:#28a745;">OK</span>{% else %}<span style="color:#dc3545;">ERROR</span>{% endif %}{% if bg_cron_status.api_code %} • Code {{ bg_cron_status.api_code }}{% endif %}{% if bg_cron_status.first_error %} • {{ bg_cron_status.first_error }}{% endif %}</span>
                 {% else %}
                   <span><strong>Cron:</strong> no status yet</span>
                 {% endif %}
               </div>
-              <div id="bg-cron-last-error" class="text-muted" style="font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%;">
+              <div id="bg-cron-last-error" class="text-muted" style="margin-top:2px;font-size:12px; white-space:normal; overflow-wrap:anywhere;">
                 {% if bg_cron_last_error and bg_cron_last_error.api_code %}
                   <span><strong>Last cron error:</strong> Code {{ bg_cron_last_error.api_code }}{% if bg_cron_last_error.first_error %} • {{ bg_cron_last_error.first_error }}{% endif %}</span>
                 {% endif %}
               </div>
+            </div>
+            <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
                 <input id="bg-update-minutes" type="number" value="30" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
