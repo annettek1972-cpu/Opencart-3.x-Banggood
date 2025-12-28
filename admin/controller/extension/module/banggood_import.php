@@ -2026,7 +2026,29 @@ HTML;
                     $idCol = null;
                     foreach ($idCandidates as $c) if (in_array($c, $available)) { $idCol = $c; break; }
                     if (!$idCol) return array();
-                    $qr = $this->db->query("SELECT `" . $this->db->escape($idCol) . "` AS cat_id FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`");
+
+                    // Prefer leaf categories only (avoids Banggood 12022 errors and speeds up global fetch)
+                    $parentCandidates = ['parent_id','parent_cat_id','parent','parentId'];
+                    $parentCol = null;
+                    foreach ($parentCandidates as $c) if (in_array($c, $available)) { $parentCol = $c; break; }
+
+                    if ($parentCol) {
+                        // leaf = id not present as someone else's parent (exclude 0/NULL/'')
+                        $qr = $this->db->query(
+                            "SELECT `" . $this->db->escape($idCol) . "` AS cat_id
+                             FROM `" . $this->db->escape($fullTable) . "`
+                             WHERE `" . $this->db->escape($idCol) . "` NOT IN (
+                               SELECT DISTINCT `" . $this->db->escape($parentCol) . "`
+                               FROM `" . $this->db->escape($fullTable) . "`
+                               WHERE `" . $this->db->escape($parentCol) . "` IS NOT NULL
+                                 AND `" . $this->db->escape($parentCol) . "` <> ''
+                                 AND `" . $this->db->escape($parentCol) . "` <> '0'
+                             )
+                             ORDER BY `" . $this->db->escape($idCol) . "`"
+                        );
+                    } else {
+                        $qr = $this->db->query("SELECT `" . $this->db->escape($idCol) . "` AS cat_id FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`");
+                    }
                     return $qr->rows;
                 } catch (\Throwable $e) {
                     return array();
@@ -2083,7 +2105,8 @@ HTML;
                         if ($code === 41010) {
                             $json['error'] = 'Banggood API rate limit (41010): You have exceeded the maximum number of calls. Please try again later (Banggood may require waiting up to 2 days).';
                         } elseif ($code === 12022) {
-                            $json['error'] = 'Banggood API error (12022): Cannot query by this cat_id. Please select a sub-category (not a parent category) and try again.';
+                            // 12022 is common for parent categories; skip it and move to next category (legacy behavior).
+                            break;
                         } elseif ($code === 31010) {
                             $json['error'] = 'Banggood API error (31010): Illegal request. Ensure the API is configured to allow your server IP.';
                         } elseif ($code === 21020) {
@@ -2093,8 +2116,11 @@ HTML;
                         } else {
                             $json['error'] = $last_fetch_error !== '' ? $last_fetch_error : 'Banggood API returned an error.';
                         }
-                        $this->response->setOutput(json_encode($json));
-                        return;
+                        // If we set a real error, return immediately; otherwise we broke out to skip 12022.
+                        if (!empty($json['error'])) {
+                            $this->response->setOutput(json_encode($json));
+                            return;
+                        }
                     }
 
                     $products = !empty($res['products']) && is_array($res['products']) ? $res['products'] : array();
