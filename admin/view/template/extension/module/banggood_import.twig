@@ -80,7 +80,9 @@
 
           <div class="col-md-8">
             {# Buttons moved to top of products column and sized like Update Categories #}
-            <div id="bg-cron-status-wrap" style="margin-bottom:8px;">
+            <div id="bg-cron-status-wrap"
+                 class="{% if bg_cron_last_error and bg_cron_last_error.api_code %}bg-cron-wrap bg-cron-wrap-error{% elseif bg_cron_status and bg_cron_status.ok %}bg-cron-wrap bg-cron-wrap-ok{% elseif bg_cron_status and (not bg_cron_status.ok) %}bg-cron-wrap bg-cron-wrap-error{% else %}bg-cron-wrap bg-cron-wrap-none{% endif %}"
+                 style="margin-bottom:8px;">
               <div id="bg-cron-status" class="text-muted" style="font-size:12px; white-space:normal; overflow-wrap:anywhere;">
                 {% if bg_cron_status %}
                   <span><strong>Cron:</strong> {{ bg_cron_status.ran_at|default('unknown') }} • {% if bg_cron_status.ok %}<span class="bg-cron-state bg-cron-ok">OK</span>{% else %}<span class="bg-cron-state bg-cron-error">ERROR</span>{% endif %}{% if bg_cron_status.api_code %} • <span class="bg-cron-error-text">Code {{ bg_cron_status.api_code }}</span>{% endif %}{% if bg_cron_status.first_error %} • <span class="bg-cron-error-text">{{ bg_cron_status.first_error }}</span>{% endif %}</span>
@@ -387,10 +389,26 @@
   }
 
   /* Cron status hooks (default colors; override in your own CSS as needed) */
-  #bg-cron-status-wrap .bg-cron-ok { color: #28a745; }
-  /* Per request: make cron error text white so you can style it */
-  #bg-cron-status-wrap .bg-cron-error,
-  #bg-cron-status-wrap .bg-cron-error-text { color: #ffffff; }
+  #bg-cron-status-wrap.bg-cron-wrap {
+    padding: 8px 10px;
+    border-radius: 4px;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-ok {
+    background: #28a745;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-error {
+    background: #dc3545;
+  }
+  #bg-cron-status-wrap.bg-cron-wrap-none {
+    background: #6c757d;
+  }
+  /* Make all cron banner text readable on colored backgrounds */
+  #bg-cron-status-wrap,
+  #bg-cron-status-wrap .text-muted,
+  #bg-cron-status-wrap strong,
+  #bg-cron-status-wrap span {
+    color: #ffffff !important;
+  }
 </style>
 
 <script type="text/javascript">
@@ -1042,6 +1060,27 @@ $('#btn-reset-fetch').on('click', function(e){
 // Initialize tree on page load if server pre-rendered HTML exists
 $(document).ready(function() {
   // Render cron status banner + poll periodically so cron errors are visible in admin.
+  function setCronBannerClass(status, lastError) {
+    var $wrap = $('#bg-cron-status-wrap');
+    if (!$wrap.length) return;
+    $wrap.removeClass('bg-cron-wrap-ok bg-cron-wrap-error bg-cron-wrap-none');
+
+    // Treat any saved last_error as "error state" even if the latest run is OK.
+    if (lastError && lastError.api_code) {
+      $wrap.addClass('bg-cron-wrap-error');
+      return;
+    }
+    if (status && status.ok === true) {
+      $wrap.addClass('bg-cron-wrap-ok');
+      return;
+    }
+    if (status && status.ok === false) {
+      $wrap.addClass('bg-cron-wrap-error');
+      return;
+    }
+    $wrap.addClass('bg-cron-wrap-none');
+  }
+
   function renderCronStatus(st) {
     var $el = $('#bg-cron-status');
     if (!$el.length) return;
@@ -1075,8 +1114,10 @@ $(document).ready(function() {
       timeout: 15000,
       data: {},
       success: function(json) {
-        if (json && typeof json.status !== 'undefined') renderCronStatus(json.status);
-        if (json && typeof json.last_error !== 'undefined') renderCronLastError(json.last_error);
+        if (!json) return;
+        if (typeof json.status !== 'undefined') renderCronStatus(json.status);
+        if (typeof json.last_error !== 'undefined') renderCronLastError(json.last_error);
+        setCronBannerClass(json.status, json.last_error);
       }
     });
   }
@@ -1084,6 +1125,7 @@ $(document).ready(function() {
   // Initial render
   renderCronStatus(bgCronStatusInitial);
   renderCronLastError(bgCronLastErrorInitial);
+  setCronBannerClass(bgCronStatusInitial, bgCronLastErrorInitial);
   // Poll every 30s
   setInterval(refreshCronStatusOnce, 30000);
 
