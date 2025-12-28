@@ -439,11 +439,16 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
 
     try {
         $params = array(
-            // Banggood uses 'cat_id' or 'category' in some variants; use 'cat_id' per docs
-            'cat_id'   => $cat_id,
-            'page'     => $page,
-            'pagesize' => $page_size,
-            'lang'     => $lang
+            // IMPORTANT:
+            // This module historically used `category` for product/getProductList (see fetchCategoryPage()).
+            // Some Banggood examples/documentation also use `cat_id`. To be resilient across API variants,
+            // send both keys and the common page-size spellings.
+            'category'  => $cat_id,
+            'cat_id'    => $cat_id,
+            'page'      => $page,
+            'pagesize'  => $page_size,
+            'page_size' => $page_size,
+            'lang'      => $lang
         );
 
         // Optional date filters (UTC strings per Banggood docs)

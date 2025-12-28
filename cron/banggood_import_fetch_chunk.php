@@ -320,6 +320,7 @@ try {
     $next_page = $page;
     $next_offset = $offset;
     $finished = false;
+    $fetch_error = '';
 
     // Banggood docs: 20 products max per page.
     $api_page_size = 20;
@@ -335,7 +336,12 @@ try {
         while (count($collected) < $chunkSize) {
             $res = $bgModel->fetchProductList($cat_id, $currentPage, $api_page_size);
             if (!$res || (!empty($res['errors']) && is_array($res['errors']))) {
-                break;
+                // IMPORTANT: do not advance cursor on API errors; retry next run instead.
+                $fetch_error = (!$res ? 'Failed to fetch product list' : implode("; ", (array)$res['errors']));
+                $next_category_index = $ci;
+                $next_page = $currentPage;
+                $next_offset = $currentOffset;
+                break 2;
             }
 
             $products = (!empty($res['products']) && is_array($res['products'])) ? $res['products'] : [];
@@ -505,13 +511,16 @@ try {
          " (created=" . $created . " updated=" . $updated . " skipped=" . $skipped . ")" .
          " Errors=" . $import_errors .
          " Finished=" . ($finished ? "1" : "0") . "\n";
+    if ($fetch_error !== '') {
+        echo "FetchError=" . $fetch_error . "\n";
+    }
     if ($import_errors > 0 && $firstError !== '') {
         echo "FirstError=" . $firstError . "\n";
     }
     echo "NextCursor=" . $cursorNew . "\n";
 
     // exit code: non-zero if we imported nothing due to errors/fetch issue is not necessarily failure
-    exit(0);
+    exit($fetch_error !== '' ? 2 : 0);
 } catch (Throwable $e) {
     fwrite(STDERR, "Cron failed: " . $e->getMessage() . "\n");
     exit(1);

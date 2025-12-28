@@ -1953,6 +1953,7 @@ HTML;
             $persisted = 0;
             $imported = 0;
             $import_errors = 0;
+            $fetch_error = '';
 
             // Walk the global product list across categories, resuming from cursor.
             for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunk_size; $ci++) {
@@ -1968,7 +1969,12 @@ HTML;
                 while (count($collected) < $chunk_size) {
                     $res = $this->model_extension_module_banggood_import->fetchProductList($cat_id, $currentPage, $api_page_size);
                     if (!$res || !empty($res['errors'])) {
-                        break;
+                        // IMPORTANT: do not advance the cursor on API errors; retry next run instead.
+                        $fetch_error = !empty($res['errors']) ? implode("; ", (array)$res['errors']) : 'Failed to fetch product list';
+                        $next_category_index = $ci;
+                        $next_page = $currentPage;
+                        $next_offset = $currentOffset;
+                        break 2;
                     }
 
                     $products = !empty($res['products']) && is_array($res['products']) ? $res['products'] : array();
@@ -2024,6 +2030,25 @@ HTML;
                 $persisted = (int)$this->saveFetchedProductsController($collected);
             } catch (\Throwable $e) {
                 $json['error'] = 'Failed writing to fetched-products table: ' . $e->getMessage();
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            if ($fetch_error !== '') {
+                // Save cursor (unchanged position) so we can retry and surface error to UI.
+                $cursorNew = json_encode(array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset));
+                if (method_exists($this->model_setting_setting, 'editSettingValue')) {
+                    $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
+                } else {
+                    $cur = $this->model_setting_setting->getSetting('module_banggood_import');
+                    if (!is_array($cur)) $cur = array();
+                    $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
+                    $this->model_setting_setting->editSetting('module_banggood_import', $cur);
+                }
+
+                $json['error'] = 'Fetch failed: ' . $fetch_error;
+                $json['persisted'] = (int)$persisted;
+                $json['next_cursor'] = $cursorNew;
                 $this->response->setOutput(json_encode($json));
                 return;
             }
