@@ -434,6 +434,32 @@ var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'oth
 // Track selected Banggood category id for Fetch (so we don't scan all categories).
 var bgSelectedCatId = '';
 
+// Auto-select a category so Fetch works without extra clicks (legacy behavior).
+// Prefer a leaf node (no children) because Banggood can return 12022 for parent categories.
+function bgAutoSelectFirstCategoryIfNeeded() {
+  try {
+    var $tree = $('#banggood-categories');
+    if (!$tree.length) return;
+
+    // If already selected, keep it.
+    var $sel = $tree.find('.cat-label.selected, .bg-label.selected').first();
+    if ($sel.length) {
+      var cidExisting = $sel.attr('data-cat-id') || $sel.closest('li').attr('data-bg-id') || $sel.closest('li').attr('data-id') || '';
+      if (!cidExisting) {
+        var badge = $sel.find('.bg-id');
+        if (badge && badge.length) cidExisting = badge.data('bg-id') || badge.attr('data-bg-id') || '';
+      }
+      if (cidExisting) bgSelectedCatId = String(cidExisting);
+      return;
+    }
+
+    // Choose first leaf category (no children) if possible
+    var $leaf = $tree.find('li.bg-node:not(.has-children) > .bg-label').first();
+    var $pick = $leaf.length ? $leaf : $tree.find('li.bg-node > .bg-label').first();
+    if ($pick.length) $pick.trigger('click');
+  } catch (e) {}
+}
+
 // Persisted queue pagination state (AJAX)
 var bgQueuePage = 1;
 var bgQueueLimit = 50;
@@ -661,6 +687,9 @@ function initBanggoodCategoryTree() {
     $b.css({'background-color':'#dff0d8','transition':'background-color 0.25s'});
     setTimeout(function(){ $b.css('background-color', orig); }, 600);
   });
+
+  // Ensure a category is selected on initial load (legacy behavior)
+  bgAutoSelectFirstCategoryIfNeeded();
 }
 
 // Ensure controls exist and wire search / expand / collapse (will not duplicate controls)
@@ -787,6 +816,7 @@ $('#btn-update-categories').off('click').on('click', function(e){
         // Our earlier guard prevents duplication by not injecting duplicate controls if controller already emitted them.
         $('#banggood-categories').html(json.html);
         initBanggoodCategoryTree();
+        bgAutoSelectFirstCategoryIfNeeded();
       }
     },
     error: function(xhr, ajaxOptions, thrownError) {
@@ -1138,6 +1168,7 @@ $(document).ready(function() {
 
   if ($('#banggood-categories ul').length) {
     initBanggoodCategoryTree();
+    bgAutoSelectFirstCategoryIfNeeded();
   }
 
   // Auto-refresh persisted products queue so import status badges update live.
