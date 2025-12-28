@@ -2051,37 +2051,70 @@ HTML;
              * - only when no pending remain, fetch/import new products
              */
             try {
-                if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
-                    $rowsToProcess = $this->model_extension_module_banggood_import->fetchPendingForProcessing($chunk_size);
-                    if (is_array($rowsToProcess) && !empty($rowsToProcess)) {
-                        $imported = 0;
-                        $import_errors = 0;
+                // Determine queue table (same as UI list)
+                $tbl = $this->getFetchedProductsTableName();
+                $qt = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                if ($qt && $qt->num_rows) {
+                    $pendingWhere = "LOWER(TRIM(COALESCE(`status`, ''))) = 'pending'";
+                    $qc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere);
+                    $pendingCnt = isset($qc->row['cnt']) ? (int)$qc->row['cnt'] : 0;
 
-                        foreach ($rowsToProcess as $row) {
-                            $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
-                            if ($pid === '') continue;
-                            try {
-                                $this->model_extension_module_banggood_import->importProductById($pid);
-                                if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
-                                    $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
+                    if ($pendingCnt > 0) {
+                        // Claim next batch of pending (newest first) and mark as processing
+                        $qr = $this->db->query(
+                            "SELECT `id`, `bg_product_id`
+                             FROM `" . $tbl . "`
+                             WHERE " . $pendingWhere . "
+                             ORDER BY (CASE WHEN `fetched_at` IS NULL OR `fetched_at` = '' THEN 0 ELSE UNIX_TIMESTAMP(`fetched_at`) END) DESC, `id` DESC
+                             LIMIT " . (int)$chunk_size
+                        );
+
+                        $rowsToProcess = is_array($qr->rows) ? $qr->rows : array();
+                        if (!empty($rowsToProcess)) {
+                            $ids = array();
+                            foreach ($rowsToProcess as $r) $ids[] = (int)$r['id'];
+                            $this->db->query(
+                                "UPDATE `" . $tbl . "`
+                                 SET `status` = 'processing',
+                                     `attempts` = COALESCE(`attempts`, 0) + 1
+                                 WHERE `id` IN (" . implode(',', $ids) . ")"
+                            );
+
+                            $imported = 0;
+                            $import_errors = 0;
+
+                            foreach ($rowsToProcess as $row) {
+                                $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
+                                if ($pid === '') continue;
+                                try {
+                                    $this->model_extension_module_banggood_import->importProductById($pid);
+                                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
+                                        $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
+                                    } else {
+                                        $now = date('Y-m-d H:i:s');
+                                        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'imported', `last_error` = NULL, `imported_at` = '" . $this->db->escape($now) . "' WHERE `bg_product_id` = '" . $this->db->escape($pid) . "'");
+                                    }
+                                    $imported++;
+                                } catch (\Throwable $e) {
+                                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
+                                        $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
+                                    } else {
+                                        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape($e->getMessage()) . "' WHERE `bg_product_id` = '" . $this->db->escape($pid) . "'");
+                                    }
+                                    $import_errors++;
                                 }
-                                $imported++;
-                            } catch (\Throwable $e) {
-                                if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
-                                    $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
-                                }
-                                $import_errors++;
                             }
-                        }
 
-                        list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
-                        $json['success'] = true;
-                        $json['imported'] = (int)$imported;
-                        $json['import_errors'] = (int)$import_errors;
-                        $json['persisted'] = 0;
-                        $json['html'] = $html;
-                        $this->response->setOutput(json_encode($json));
-                        return;
+                            list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
+                            $json['success'] = true;
+                            $json['imported'] = (int)$imported;
+                            $json['import_errors'] = (int)$import_errors;
+                            $json['persisted'] = 0;
+                            $json['pending_total'] = (int)$pendingCnt;
+                            $json['html'] = $html;
+                            $this->response->setOutput(json_encode($json));
+                            return;
+                        }
                     }
                 }
             } catch (\Throwable $e) {
