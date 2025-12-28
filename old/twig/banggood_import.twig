@@ -1,0 +1,1098 @@
+{{ header }}{{ column_left }}
+<div id="content">
+  <div class="page-header">
+    <div class="container-fluid">
+      <div class="pull-right">
+        <button type="submit"
+                form="form-banggood-import"
+                data-toggle="tooltip"
+                title="{{ button_save }}"
+                class="btn btn-primary">
+          <i class="fa fa-save"></i>
+        </button>
+        <a href="{{ cancel }}"
+           data-toggle="tooltip"
+           title="{{ button_cancel }}"
+           class="btn btn-default">
+          <i class="fa fa-reply"></i>
+        </a>
+      </div>
+      <h1>{{ heading_title }}</h1>
+      <ul class="breadcrumb">
+        {% for breadcrumb in breadcrumbs %}
+          <li><a href="{{ breadcrumb.href }}">{{ breadcrumb.text }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <div class="container-fluid">
+    {% if error_warning %}
+      <div class="alert alert-danger alert-dismissible">
+        <i class="fa fa-exclamation-circle"></i> {{ error_warning }}
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+      </div>
+    {% endif %}
+
+    {% if success %}
+      <div class="alert alert-success alert-dismissible">
+        <i class="fa fa-check-circle"></i> {{ success }}
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+      </div>
+    {% endif %}
+
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title">
+          <i class="fa fa-th-large"></i> Banggood: Categories & Products
+        </h3>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-md-4">
+            <div style="margin-bottom:10px;">
+              <button type="button" id="btn-update-categories" class="btn btn-default">
+                <i class="fa fa-refresh"></i> Update Categories
+              </button>
+
+              {# Mirror state badge (clickable) #}
+              {% if module_banggood_import_delete_missing %}
+                <span id="bg-mirror-badge" class="label label-success" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror ON</span>
+              {% else %}
+                <span id="bg-mirror-badge" class="label label-default" style="margin-left:8px; cursor:pointer;" title="Click to toggle mirror">Mirror OFF</span>
+              {% endif %}
+            </div>
+
+            <div class="well" style="min-height:200px;">
+              <h4 style="margin-top:0;">Banggood Categories</h4>
+
+              {# --- Persistent controls inserted by controller's renderBgTreeHtml or by Twig (only one set) --- #}
+
+              <div id="banggood-categories" aria-live="polite">
+                {% if bg_categories_html %}
+                  {{ bg_categories_html|raw }}
+                {% else %}
+                  <div class="text-muted">No categories loaded. Click "Update Categories" to fetch.</div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-md-8">
+            {# Buttons moved to top of products column and sized like Update Categories #}
+            <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
+              <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
+                <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
+                <input id="bg-update-minutes" type="number" value="30" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
+                <button id="btn-fetch-updates" class="btn btn-default" title="{{ button_fetch_updates|default('Fetch Updates') }}">
+                  <i class="fa fa-clock-o"></i> {{ button_fetch_updates|default('Fetch Updates') }}
+                </button>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <label for="bg-fetch-count" class="text-muted" style="margin:0;font-size:12px;">Fetch</label>
+                <input id="bg-fetch-count" type="number" value="10" min="1" max="500" class="form-control input-sm" style="width:90px;" />
+              </div>
+              <button id="btn-fetch-chunk" class="btn btn-default" title="Fetch next 10 products">
+                <i class="fa fa-download"></i> Fetch
+              </button>
+              <button id="btn-reset-fetch" class="btn btn-default" title="Reset fetch position (start from beginning)">
+                <i class="fa fa-undo"></i> Reset Fetch
+              </button>
+              <button id="btn-clear-products" class="btn btn-default" title="Clear product list">
+                <i class="fa fa-times"></i> Clear
+              </button>
+            </div>
+
+            <div class="well" style="min-height:200px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <h4 style="margin:0;">
+                  Product
+                  <small id="bg-persisted-count" class="text-muted" style="margin-left:8px;">
+                    ({{ bg_fetched_products_count|default(0) }})
+                  </small>
+                </h4>
+                <div id="bg-queue-pager" style="display:flex;align-items:center;gap:6px;">
+                  <button type="button" id="bg-queue-prev" class="btn btn-default btn-xs" title="Previous page" style="min-width:60px;">Prev</button>
+                  <span class="text-muted" style="font-size:12px;white-space:nowrap;">
+                    Page <span id="bg-queue-page">1</span>/<span id="bg-queue-page-total">1</span>
+                  </span>
+                  <button type="button" id="bg-queue-next" class="btn btn-default btn-xs" title="Next page" style="min-width:60px;">Next</button>
+                  <select id="bg-queue-limit" class="form-control input-sm" style="width:90px;height:24px;padding:2px 6px;" title="Rows per page">
+                    <option value="25">25</option>
+                    <option value="50" selected="selected">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="banggood-products" aria-live="polite" style="margin-top:12px;">
+                {% if bg_fetched_products_html %}
+                  {{ bg_fetched_products_html|raw }}
+                {% else %}
+                  <!-- product list will be loaded here -->
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title">
+          <i class="fa fa-cog"></i> {{ text_edit }}
+        </h3>
+      </div>
+      <div class="panel-body">
+        <form action="{{ action }}"
+              method="post"
+              enctype="multipart/form-data"
+              id="form-banggood-import"
+              class="form-horizontal">
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-status">{{ entry_status }}</label>
+            <div class="col-sm-10">
+              <select name="module_banggood_import_status"
+                      id="input-status"
+                      class="form-control">
+                {% if module_banggood_import_status %}
+                  <option value="1" selected="selected">{{ text_enabled }}</option>
+                  <option value="0">{{ text_disabled }}</option>
+                {% else %}
+                  <option value="1">{{ text_enabled }}</option>
+                  <option value="0" selected="selected">{{ text_disabled }}</option>
+                {% endif %}
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-base-url">{{ entry_base_url }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_base_url"
+                     value="{{ module_banggood_import_base_url }}"
+                     id="input-base-url"
+                     class="form-control" />
+              <span class="help-block">Example: https://api.banggood.com</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-app-id">{{ entry_app_id }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_app_id"
+                     value="{{ module_banggood_import_app_id }}"
+                     id="input-app-id"
+                     class="form-control" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-app-secret">{{ entry_app_secret }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_app_secret"
+                     value="{{ module_banggood_import_app_secret }}"
+                     id="input-app-secret"
+                     class="form-control" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-api-key">{{ entry_api_key }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_api_key"
+                     value="{{ module_banggood_import_api_key }}"
+                     id="input-api-key"
+                     class="form-control" />
+              <span class="help-block">Usually leave empty if you use App ID + App Secret.</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-default-language">{{ entry_default_language }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_default_language"
+                     value="{{ module_banggood_import_default_language }}"
+                     id="input-default-language"
+                     class="form-control" />
+              <span class="help-block">Example: en</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-default-currency">{{ entry_default_currency }}</label>
+            <div class="col-sm-10">
+              <input type="text"
+                     name="module_banggood_import_default_currency"
+                     value="{{ module_banggood_import_default_currency }}"
+                     id="input-default-currency"
+                     class="form-control" />
+              <span class="help-block">Example: USD</span>
+            </div>
+          </div>
+
+          {# NEW: Permanently mirror (delete missing) checkbox with hidden field for reliable POST value #}
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-delete-missing">{{ entry_delete_missing }}</label>
+            <div class="col-sm-10">
+              <div class="checkbox">
+                <label>
+                  {# hidden input ensures a value is always posted (0 when unchecked) #}
+                  <input type="hidden" name="module_banggood_import_delete_missing" id="input-delete-missing-hidden" value="{{ module_banggood_import_delete_missing ? 1 : 0 }}" />
+                  <input type="checkbox"
+                         id="input-delete-missing"
+                         value="1"
+                         {% if module_banggood_import_delete_missing %}checked="checked"{% endif %} />
+                  <small class="text-muted" style="margin-left:8px">{{ help_delete_missing }}</small>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {# NEW: Overwrite option images (POA images) #}
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-overwrite-option-images">{{ entry_overwrite_option_images }}</label>
+            <div class="col-sm-10">
+              <div class="checkbox">
+                <label>
+                  <input type="hidden" name="module_banggood_import_overwrite_option_images" id="input-overwrite-option-images-hidden" value="{{ module_banggood_import_overwrite_option_images ? 1 : 0 }}" />
+                  <input type="checkbox"
+                         id="input-overwrite-option-images"
+                         value="1"
+                         {% if module_banggood_import_overwrite_option_images %}checked="checked"{% endif %} />
+                  <small class="text-muted" style="margin-left:8px">{{ help_overwrite_option_images }}</small>
+                </label>
+              </div>
+            </div>
+          </div>
+
+        </form>
+      </div>
+    </div>
+
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title">
+          <i class="fa fa-download"></i> Banggood Import Actions
+        </h3>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-sm-6">
+            <h4>{{ entry_category_id }}</h4>
+            <div class="form-group">
+              <label class="control-label" for="input-category-id">{{ entry_category_id }}</label>
+              <input type="text"
+                     id="input-category-id"
+                     class="form-control"
+                     placeholder="Banggood category ID" />
+            </div>
+            <div class="form-group">
+              <label class="control-label" for="input-max-products">{{ entry_max_products }}</label>
+              <input type="number"
+                     id="input-max-products"
+                     class="form-control"
+                     value="0"
+                     min="0" />
+              <span class="help-block">0 = import all products in category.</span>
+            </div>
+            <button id="button-import-category"
+                    data-loading-text="Loading..."
+                    class="btn btn-primary">
+              <i class="fa fa-download"></i> {{ button_import_category }}
+            </button>
+          </div>
+          <div class="col-sm-6">
+            <h4>{{ entry_product_url }}</h4>
+            <div class="form-group">
+              <label class="control-label" for="input-product-url">{{ entry_product_url }}</label>
+              <input type="text"
+                     id="input-product-url"
+                     class="form-control"
+                     placeholder="https://www.banggood.com/product/123456789.html" />
+            </div>
+            <button id="button-import-product-url"
+                    data-loading-text="Loading..."
+                    class="btn btn-success">
+              <i class="fa fa-download"></i> {{ button_import_product_url }}
+            </button>
+          </div>
+        </div>
+        <hr/>
+        <div id="banggood-import-log"
+             class="well"
+             style="max-height: 300px; overflow-y: auto;">
+          {% if banggood_import_log %}
+            {{ banggood_import_log }}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{{ footer }}
+
+{# Small CSS to ensure toggle icon size is stable on initial render and after JS replaces innerHTML.
+   This is intentionally narrow-scoped to #banggood-categories to avoid affecting other admin UI. #}
+<style>
+  /* Ensure toggle buttons and their icon spans are consistent size and alignment */
+  #banggood-categories .bg-toggle {
+    font-size: 14px;            /* consistent icon size */
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    padding: 0 4px;
+    display: inline-block;
+    text-align: center;
+    vertical-align: middle;
+    box-sizing: content-box;
+  }
+  #banggood-categories .bg-toggle .bg-toggle-icon,
+  #banggood-categories .bg-toggle-icon {
+    display: inline-block;
+    font-size: 14px;
+    line-height: 1;
+    width: 18px;
+    height: 18px;
+    text-align: center;
+    vertical-align: middle;
+  }
+  /* Make sure hidden placeholder toggles don't collapse layout */
+  #banggood-categories .bg-toggle[aria-hidden="true"] {
+    visibility: hidden;
+    width: 22px;
+    display: inline-block;
+  }
+</style>
+
+<script type="text/javascript">
+// Resolve controller URLs (use provided variables or fallback to route strings)
+var updateCategoriesUrl = '{{ update_categories_url|default(('index.php?route=extension/module/banggood_import/updateCategories&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
+var importCategoryUrl = '{{ import_category_url|default(('index.php?route=extension/module/banggood_import/importCategory&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
+var importProductUrlAction = '{{ import_product_url_action|default(('index.php?route=extension/module/banggood_import/importProductUrl&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
+var getProductListUrl = '{{ ('index.php?route=extension/module/banggood_import/getProductList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var fetchChunkUrl = '{{ ('index.php?route=extension/module/banggood_import/fetchProductsChunk&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var resetFetchCursorUrl = '{{ ('index.php?route=extension/module/banggood_import/resetFetchCursor&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/getProductUpdateList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+
+// Track what the Products panel is showing so we only auto-refresh the persisted queue view.
+var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
+
+// Persisted queue pagination state (AJAX)
+var bgQueuePage = 1;
+var bgQueueLimit = 50;
+
+// Bind import-by-id buttons inside a container
+function bindImportButtons($container) {
+  $container = $container && $container.length ? $container : $(document);
+  $container.find('.bg-import-product').off('click').on('click', function(e){
+    e.preventDefault();
+    var $btn = $(this);
+    var pid = $btn.data('product-id') || $btn.attr('data-product-id');
+    if (!pid) return;
+
+    $btn.prop('disabled', true);
+    var oldHtml = $btn.html();
+    $btn.html('<i class="fa fa-spinner fa-spin"></i>');
+
+    $.ajax({
+      url: importProductByIdUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { product_id: pid },
+      success: function(json) {
+        $('.alert').remove();
+        if (json && json.error) {
+          $('#content > .container-fluid').prepend(
+            '<div class="alert alert-danger alert-dismissible">' +
+              '<i class="fa fa-exclamation-circle"></i> ' + json.error +
+              '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+            '</div>'
+          );
+        } else if (json && json.success) {
+          $('#content > .container-fluid').prepend(
+            '<div class="alert alert-success alert-dismissible">' +
+              '<i class="fa fa-check-circle"></i> ' + json.success +
+              '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+            '</div>'
+          );
+        }
+      },
+      error: function(xhr, status, err) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> AJAX import failed: ' + err +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      },
+      complete: function() {
+        $btn.prop('disabled', false);
+        $btn.html(oldHtml);
+      }
+    });
+  });
+}
+
+// Category import/product import AJAX handlers
+$('#button-import-category').on('click', function(e) {
+  e.preventDefault();
+
+  var category_id = $('#input-category-id').val();
+  var max_products = $('#input-max-products').val();
+
+  var $btn = $(this);
+  $btn.button && $btn.button('loading');
+
+  $.ajax({
+    url: importCategoryUrl,
+    type: 'post',
+    dataType: 'json',
+    data: {
+      category_id: category_id,
+      max_products: max_products
+    },
+    success: function(json) {
+      $('.alert').remove();
+
+      if (json.error) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> ' + json.error +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      }
+
+      if (json.success) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-success alert-dismissible">' +
+            '<i class="fa fa-check-circle"></i> ' + json.success +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      }
+
+      $btn.button && $btn.button('reset');
+    },
+    error: function(xhr, ajaxOptions, thrownError) {
+      alert(
+        'AJAX error (category import):\n' +
+        thrownError + "\n" +
+        xhr.status + ' ' + xhr.statusText + "\n\n" +
+        xhr.responseText
+      );
+      $btn.button && $btn.button('reset');
+    }
+  });
+});
+
+$('#button-import-product-url').on('click', function(e) {
+  e.preventDefault();
+
+  var product_url = $('#input-product-url').val();
+
+  var $btn = $(this);
+  $btn.button && $btn.button('loading');
+
+  $.ajax({
+    url: importProductUrlAction,
+    type: 'post',
+    dataType: 'json',
+    data: {
+      product_url: product_url
+    },
+    success: function(json) {
+      $('.alert').remove();
+
+      if (json.error) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> ' + json.error +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      }
+
+      if (json.success) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-success alert-dismissible">' +
+            '<i class="fa fa-check-circle"></i> ' + json.success +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      }
+
+      $btn.button && $btn.button('reset');
+    },
+    error: function(xhr, ajaxOptions, thrownError) {
+      alert(
+        'AJAX error (product URL import):\n' +
+        thrownError + "\n" +
+        xhr.status + ' ' + xhr.statusText + "\n\n" +
+        xhr.responseText
+      );
+      $btn.button && $btn.button('reset');
+    }
+  });
+});
+
+// Category tree helpers
+function initBanggoodCategoryTree() {
+  var $tree = $('#banggood-categories');
+  if (!$tree.length) return;
+
+  // Ensure child ULs are hidden (collapsed)
+  // new (safe) — only hide ULs that are direct children of LIs
+  $tree.find('li > ul').each(function() {
+    $(this).hide();
+  });
+
+  // Initialize toggles to right-pointing arrow (use a span so styles match server-rendered buttons)
+  $tree.find('.bg-toggle').each(function() {
+    // If toggle is a button with existing inner span, keep it; otherwise normalize to a single .bg-toggle-icon
+    $(this).html('<span class="bg-toggle-icon">&#9656;</span>');
+  });
+
+  // Toggle expand/collapse
+  $tree.find('li.has-children > .bg-toggle').off('click').on('click', function(e) {
+    e.stopPropagation();
+    var $t = $(this);
+    var $li = $t.closest('li');
+    var $childUl = $li.children('ul').first();
+    if ($childUl.length === 0) return;
+    if ($childUl.is(':visible')) {
+      $childUl.slideUp(120);
+      $t.html('<span class="bg-toggle-icon">&#9656;</span>');
+    } else {
+      $childUl.slideDown(120);
+      $t.html('<span class="bg-toggle-icon">&#9662;</span>');
+    }
+  });
+
+  // Label click selects category visually (and loads products)
+  $tree.find('.cat-label, .bg-label').off('click').on('click', function(e) {
+    e.stopPropagation();
+    $tree.find('.cat-label, .bg-label').removeClass('selected');
+    $(this).addClass('selected');
+
+    // determine category id from various possible attributes
+    var cid = $(this).attr('data-cat-id') || $(this).closest('li').attr('data-bg-id') || $(this).closest('li').attr('data-id') || '';
+    if (!cid) {
+      var badge = $(this).find('.bg-id');
+      if (badge && badge.length) cid = badge.data('bg-id') || badge.attr('data-bg-id') || '';
+    }
+    if (cid) {
+      loadProducts(cid, 1);
+    }
+  });
+
+  // copy id badges
+  $tree.find('.bg-id').off('click').on('click', function(e){
+    e.stopPropagation();
+    var id = $(this).data('bg-id') || $(this).text().replace(/^#/, '');
+    if (!id) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(String(id)).catch(function(){});
+    } else {
+      var ta = $('<textarea>').css({position:'fixed',left:'-9999px'}).val(String(id)).appendTo('body').select();
+      try { document.execCommand('copy'); } catch (ex) {}
+      ta.remove();
+    }
+    var $b = $(this);
+    var orig = $b.css('background-color');
+    $b.css({'background-color':'#dff0d8','transition':'background-color 0.25s'});
+    setTimeout(function(){ $b.css('background-color', orig); }, 600);
+  });
+}
+
+// Ensure controls exist and wire search / expand / collapse (will not duplicate controls)
+(function($){
+  $(function(){
+    // Detect if any of the standard control elements already exist (controller's render may have emitted them)
+    var hasControllerSearch = $('#bg-tree-search').length > 0;
+    var hasControllerExpand = $('#bg-tree-expand-all').length > 0 || $('#bg-expand-all').length > 0;
+    var hasContainer = $('#bg-controls-container').length > 0;
+
+    if (!hasControllerSearch && !hasContainer && !hasControllerExpand) {
+      // insert only if missing (should not happen if controller provided controls, but safe fallback)
+      $('#banggood-categories').before('' +
+        '<div id="bg-controls-container" style="margin-bottom:10px;">' +
+        '<input id="bg-tree-search" type="text" placeholder="Search categories..." class="form-control" style="display:inline-block;width:62%;margin-right:8px;vertical-align:middle" />' +
+        '<button id="bg-expand-all" class="btn btn-default btn-sm" type="button" style="vertical-align:middle;margin-right:6px;">Expand all</button>' +
+        '<button id="bg-collapse-all" class="btn btn-default btn-sm" type="button" style="vertical-align:middle;">Collapse all</button>' +
+        '</div>');
+    }
+
+    // Expand / Collapse all handlers (support both controller IDs and fallback IDs)
+    $(document).off('click', '#bg-expand-all #bg-tree-expand-all').on('click', '#bg-expand-all, #bg-tree-expand-all', function(e){
+      e.preventDefault();
+      $('#banggood-categories').find('li.bg-node > ul').show();
+      $('#banggood-categories .bg-toggle').each(function(){
+        $(this).html('<span class="bg-toggle-icon">&#9662;</span>');
+      });
+    });
+    $(document).off('click', '#bg-collapse-all #bg-tree-collapse-all').on('click', '#bg-collapse-all, #bg-tree-collapse-all', function(e){
+      e.preventDefault();
+      $('#banggood-categories').find('li.bg-node > ul').hide();
+      $('#banggood-categories .bg-toggle').each(function(){
+        $(this).html('<span class="bg-toggle-icon">&#9656;</span>');
+      });
+    });
+
+    // Search (debounced) - will operate on whichever search input exists (#bg-tree-search)
+    var bgSearchTimer = null;
+    $(document).off('input', '#bg-tree-search').on('input', '#bg-tree-search', function(){
+      clearTimeout(bgSearchTimer);
+      var q = $(this).val().trim().toLowerCase();
+      bgSearchTimer = setTimeout(function(){
+        if (!q) {
+          $('#banggood-categories .bg-node').show();
+          return;
+        }
+        $('#banggood-categories .bg-node').each(function(){
+          var $n = $(this);
+          var text = $n.text().toLowerCase();
+          if (text.indexOf(q) !== -1) {
+            $n.show();
+            // show ancestors
+            $n.parents('.bg-node').show();
+            // ensure parent lists visible (only ancestor ULs under .bg-node)
+            $n.parents('li.bg-node').each(function(){
+              $(this).children('ul').show();
+              // also update their toggle icon to expanded for clarity
+              $(this).children('.bg-toggle').html('<span class="bg-toggle-icon">&#9662;</span>');
+            });
+          } else {
+            $n.hide();
+          }
+        });
+      }, 180);
+    });
+  });
+})(jQuery);
+
+
+// Update Categories (AJAX)
+$('#btn-update-categories').off('click').on('click', function(e){
+  e.preventDefault();
+  var $btn = $(this);
+  $btn.prop('disabled', true);
+  $btn.find('i').addClass('fa-spin');
+
+  $.ajax({
+    url: updateCategoriesUrl,
+    type: 'post',
+    dataType: 'json',
+    data: {},
+    success: function(json) {
+      // remove existing alerts
+      $('.alert').remove();
+
+      if (json.error) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> ' + json.error +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      } else {
+        // Show counts if returned
+        if (typeof json.inserted !== 'undefined' || typeof json.updated !== 'undefined') {
+          var inserted = (json.inserted ? json.inserted : 0);
+          var updated  = (json.updated ? json.updated : 0);
+          var msg = 'Categories updated: ' + inserted + ' inserted, ' + updated + ' updated.';
+          if (json.deleteMissingUsed) {
+            msg += ' (Mirror enabled: missing categories removed.)';
+            $('#bg-mirror-badge').removeClass('label-default').addClass('label-success').text('Mirror ON');
+            $('#input-delete-missing-hidden').val('1');
+            $('#input-delete-missing').prop('checked', true);
+          }
+          $('#content > .container-fluid').prepend(
+            '<div class="alert alert-success alert-dismissible">' +
+              '<i class="fa fa-check-circle"></i> ' + msg +
+              '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+            '</div>'
+          );
+        } else if (json.success) {
+          $('#content > .container-fluid').prepend(
+            '<div class="alert alert-success alert-dismissible">' +
+              '<i class="fa fa-check-circle"></i> ' + json.success +
+              '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+            '</div>'
+          );
+        }
+      }
+
+      if (json.html) {
+        // Replace the category container's contents with the returned HTML.
+        // The returned HTML (from controller) is allowed to include its own control block (search/expand buttons).
+        // Our earlier guard prevents duplication by not injecting duplicate controls if controller already emitted them.
+        $('#banggood-categories').html(json.html);
+        initBanggoodCategoryTree();
+      }
+    },
+    error: function(xhr, ajaxOptions, thrownError) {
+      $('#banggood-categories').html('<div class="text-danger">AJAX error: ' + thrownError + '</div>');
+    },
+    complete: function() {
+      $btn.prop('disabled', false);
+      $btn.find('i').removeClass('fa-spin');
+    }
+  });
+});
+
+// Mirror badge click: toggle checkbox and save settings via AJAX
+$('#bg-mirror-badge').on('click', function(e) {
+  e.preventDefault();
+  var $badge = $(this);
+  var $checkbox = $('#input-delete-missing');
+  var $hidden = $('#input-delete-missing-hidden');
+
+  // toggle checkbox
+  var checked = !$checkbox.prop('checked');
+  $checkbox.prop('checked', checked);
+  $hidden.val(checked ? '1' : '0');
+
+  // send form via AJAX to save settings (controller index returns JSON for AJAX saves)
+  var $form = $('#form-banggood-import');
+  var saveUrl = $form.attr('action').replace(/&amp;/g, '&');
+
+  // visual feedback
+  $badge.html('<i class="fa fa-spinner fa-spin"></i>');
+
+  $.ajax({
+    url: saveUrl,
+    type: 'post',
+    dataType: 'json',
+    data: $form.serialize(),
+    success: function(json) {
+      $('.alert').remove();
+      if (json && json.success) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-success alert-dismissible">' +
+            '<i class="fa fa-check-circle"></i> ' + json.success +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+        if (checked) {
+          $badge.removeClass('label-default').addClass('label-success').text('Mirror ON');
+        } else {
+          $badge.removeClass('label-success').addClass('label-default').text('Mirror OFF');
+        }
+      } else {
+        var msg = (json && json.error) ? json.error : 'Save failed';
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> ' + msg +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+        // revert checkbox state on failure
+        $checkbox.prop('checked', !checked);
+        $hidden.val(!checked ? '1' : '0');
+        if (!checked) { $badge.removeClass('label-success').addClass('label-default').text('Mirror OFF'); }
+        else { $badge.removeClass('label-default').addClass('label-success').text('Mirror ON'); }
+      }
+    },
+    error: function(xhr, ajaxOptions, thrownError) {
+      $('#content > .container-fluid').prepend(
+        '<div class="alert alert-danger alert-dismissible">' +
+          '<i class="fa fa-exclamation-circle"></i> AJAX save failed: ' + thrownError +
+          '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+        '</div>'
+      );
+      // revert checkbox
+      $checkbox.prop('checked', !checked);
+      $hidden.val(!checked ? '1' : '0');
+      if (!checked) { $badge.removeClass('label-success').addClass('label-default').text('Mirror OFF'); }
+      else { $badge.removeClass('label-default').addClass('label-success').text('Mirror ON'); }
+    }
+  });
+});
+
+// Keep overwrite-option-images hidden value in sync with checkbox (for reliable POST)
+$('#input-overwrite-option-images').on('change', function() {
+  $('#input-overwrite-option-images-hidden').val($(this).prop('checked') ? '1' : '0');
+});
+
+// Load products for a single category (paged)
+function loadProducts(cat_id, page) {
+  page = page || 1;
+  bgProductsMode = 'category';
+  var $panel = $('#banggood-products');
+  $panel.html('<div class="text-center" style="padding:40px 0;"><i class="fa fa-spinner fa-spin fa-2x"></i><div class="text-muted">Loading products...</div></div>');
+
+  $.ajax({
+    url: getProductListUrl,
+    type: 'post',
+    dataType: 'json',
+    data: { cat_id: cat_id, page: page },
+    success: function(json) {
+      if (json.error) { $panel.html('<div class="alert alert-danger">'+ json.error +'</div>'); return; }
+      if (json.html) $panel.html(json.html);
+      else {
+        var out = '';
+        if (!json.products || !json.products.length) out = '<div class="text-muted">No products found for this category.</div>';
+        else {
+          out = '<div>';
+          json.products.forEach(function(p){
+            out += '<div class="row" style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #eee;">' +
+                   '<div class="col-xs-3"><img src="'+(p.img||'')+'" style="max-width:100%"/></div>' +
+                   '<div class="col-xs-7"><strong>' + (p.product_name||p.product_id) + '</strong><div class="text-muted" style="font-size:12px">' + (p.meta_desc||'') + '</div></div>' +
+                   '<div class="col-xs-2 text-right"><button class="btn btn-sm btn-primary bg-import-product" data-product-id="' + p.product_id + '"><i class="fa fa-download"></i></button></div>' +
+                   '</div>';
+          });
+          out += '</div>';
+        }
+        $panel.html(out);
+      }
+
+      $panel.find('.bg-products-page').off('click').on('click', function(e){
+        e.preventDefault();
+        var page = $(this).data('page');
+        loadProducts(cat_id, page);
+      });
+
+      bindImportButtons($panel);
+    },
+    error: function(xhr, status, err) {
+      $panel.html('<div class="text-danger">AJAX error loading products: ' + err + '</div>');
+      console && console.error(xhr.responseText);
+    }
+  });
+}
+
+
+$('#btn-fetch-chunk').on('click', function(e){
+  e.preventDefault();
+  var $btn = $(this);
+  var $panel = $('#banggood-products');
+  bgProductsMode = 'persisted';
+  var count = parseInt($('#bg-fetch-count').val(), 10);
+  if (!count || count < 1) count = 10;
+  if (count > 500) count = 500;
+
+  $btn.prop('disabled', true);
+  $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+
+  $.ajax({
+    url: fetchChunkUrl,
+    type: 'post',
+    dataType: 'json',
+    data: {
+      chunk_size: count
+    },
+    success: function(json) {
+      if (json.error) {
+        $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
+        return;
+      }
+      if (json.finished) {
+        // continue, we still render the DB list below
+      }
+      if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
+        var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+        if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
+        if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
+          msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
+        }
+        if (json.finished) msg += ' • End of list';
+        // Replace panel with status + DB-backed list HTML
+        $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
+      }
+      if (json.html) $panel.append(json.html);
+    },
+    error: function(xhr, status, err) {
+      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+    },
+    complete: function() {
+      $btn.prop('disabled', false);
+      $btn.html('<i class="fa fa-download"></i> Fetch');
+    }
+  });
+});
+
+// Fetch updates (GetProductUpdateList)
+$('#btn-fetch-updates').on('click', function(e){
+  e.preventDefault();
+  var $btn = $(this);
+  var $panel = $('#banggood-products');
+  bgProductsMode = 'updates';
+
+  var minutes = parseInt($('#bg-update-minutes').val(), 10);
+  if (!minutes || minutes < 1) minutes = 30;
+
+  $btn.prop('disabled', true);
+  var old = $btn.html();
+  $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+
+  $.ajax({
+    url: fetchUpdatesUrl,
+    type: 'post',
+    dataType: 'json',
+    data: { minutes: minutes, page: 1 },
+    success: function(json) {
+      if (json && json.error) {
+        $panel.prepend('<div class="alert alert-danger">'+ json.error +'</div>');
+        return;
+      }
+      if (json && json.html) {
+        // replace panel with the updates view
+        $panel.html(json.html);
+      } else {
+        $panel.html('<div class="text-muted">No updates returned.</div>');
+      }
+      bindImportButtons($panel);
+    },
+    error: function(xhr, status, err) {
+      $panel.prepend('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+    },
+    complete: function() {
+      $btn.prop('disabled', false);
+      $btn.html(old);
+    }
+  });
+});
+
+// Clear products button
+$('#btn-clear-products').on('click', function(e){
+  e.preventDefault();
+  $('#banggood-products').empty();
+  bgProductsMode = 'other';
+});
+
+$('#btn-reset-fetch').on('click', function(e){
+  e.preventDefault();
+  if (!confirm('Reset fetch position so the next Fetch starts from the beginning?')) return;
+
+  var $btn = $(this);
+  $btn.prop('disabled', true);
+
+  $.ajax({
+    url: resetFetchCursorUrl,
+    type: 'post',
+    dataType: 'json',
+    data: {},
+    success: function(json) {
+      $('.alert').remove();
+      if (json && json.error) {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-danger alert-dismissible">' +
+            '<i class="fa fa-exclamation-circle"></i> ' + json.error +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      } else {
+        $('#content > .container-fluid').prepend(
+          '<div class="alert alert-success alert-dismissible">' +
+            '<i class="fa fa-check-circle"></i> ' + (json.success || 'Fetch cursor reset.') +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+          '</div>'
+        );
+      }
+    },
+    complete: function() {
+      $btn.prop('disabled', false);
+    }
+  });
+});
+
+// Initialize tree on page load if server pre-rendered HTML exists
+$(document).ready(function() {
+  if ($('#banggood-categories ul').length) {
+    initBanggoodCategoryTree();
+  }
+
+  // Auto-refresh persisted products queue so import status badges update live.
+  // Only runs when the products panel is showing the persisted queue view.
+  var bgQueueRefreshTimer = null;
+  var bgQueueRefreshInFlight = false;
+  var lastQueueHtml = null;
+
+  function syncQueuePagerUi(page, pageTotal) {
+    page = parseInt(page, 10); if (!page || page < 1) page = 1;
+    pageTotal = parseInt(pageTotal, 10); if (!pageTotal || pageTotal < 1) pageTotal = 1;
+    $('#bg-queue-page').text(String(page));
+    $('#bg-queue-page-total').text(String(pageTotal));
+    $('#bg-queue-prev').prop('disabled', page <= 1);
+    $('#bg-queue-next').prop('disabled', page >= pageTotal);
+  }
+
+  function refreshPersistedQueueOnce() {
+    if (bgQueueRefreshInFlight) return;
+    if (bgProductsMode !== 'persisted') return;
+    if (!$('#banggood-products').length) return;
+
+    bgQueueRefreshInFlight = true;
+    $.ajax({
+      url: getFetchedProductsListPagedUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { limit: bgQueueLimit, page: bgQueuePage },
+      success: function(json) {
+        if (!json || json.error) return;
+        if (typeof json.total_count !== 'undefined') {
+          $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
+        }
+        if (typeof json.page !== 'undefined' && typeof json.page_total !== 'undefined') {
+          // server may clamp page; keep client in sync
+          bgQueuePage = parseInt(json.page, 10) || bgQueuePage;
+          syncQueuePagerUi(json.page, json.page_total);
+        }
+        if (typeof json.html === 'string') {
+          // Avoid DOM churn if nothing changed
+          if (lastQueueHtml !== json.html) {
+            lastQueueHtml = json.html;
+            $('#banggood-products').html(json.html);
+          }
+        }
+      },
+      complete: function() {
+        bgQueueRefreshInFlight = false;
+      }
+    });
+  }
+
+  // Pager controls (AJAX)
+  $('#bg-queue-prev').on('click', function(e){
+    e.preventDefault();
+    bgProductsMode = 'persisted';
+    if (bgQueuePage > 1) bgQueuePage -= 1;
+    refreshPersistedQueueOnce();
+  });
+  $('#bg-queue-next').on('click', function(e){
+    e.preventDefault();
+    bgProductsMode = 'persisted';
+    bgQueuePage += 1;
+    refreshPersistedQueueOnce();
+  });
+  $('#bg-queue-limit').on('change', function(){
+    var v = parseInt($(this).val(), 10);
+    if (!v || v < 1) v = 50;
+    bgQueueLimit = v;
+    bgQueuePage = 1;
+    bgProductsMode = 'persisted';
+    refreshPersistedQueueOnce();
+  });
+  // Initialize limit selector to our default
+  try { $('#bg-queue-limit').val(String(bgQueueLimit)); } catch(e) {}
+  syncQueuePagerUi(bgQueuePage, 1);
+
+  // Start polling (every 5s). Cheap/no-op when not in persisted mode.
+  bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
+  // Also do a single refresh shortly after page load.
+  setTimeout(refreshPersistedQueueOnce, 800);
+});
+</script>
