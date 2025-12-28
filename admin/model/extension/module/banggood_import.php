@@ -2279,6 +2279,16 @@ protected function apiRequestRawSimple($url) {
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             // Restore original behavior (fixed 30s total timeout)
             curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            // Some hosts have broken IPv6 routing. PHP/cURL may prefer IPv6 while CLI curl uses IPv4.
+            // Allow forcing IPv4 via module setting to prevent "0 bytes received" timeouts.
+            $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+            if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+                curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            }
+            // Be explicit about HTTP/1.1 for keep-alive compatibility on some proxies/CDNs
+            if (defined('CURLOPT_HTTP_VERSION') && defined('CURL_HTTP_VERSION_1_1')) {
+                curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+            }
             if (strtoupper($method) === 'POST') {
                 curl_setopt($ch, CURLOPT_POST, 1);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&'));
@@ -2334,6 +2344,13 @@ protected function apiRequestRawSimple($url) {
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         // Restore original behavior (fixed 30s total timeout)
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $force_v4 = (int)$this->config->get('module_banggood_import_curl_force_ipv4');
+        if ($force_v4 === 1 && defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+            curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        }
+        if (defined('CURLOPT_HTTP_VERSION') && defined('CURL_HTTP_VERSION_1_1')) {
+            curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+        }
         if (strtoupper($method) === 'POST') { curl_setopt($ch, CURLOPT_POST, 1); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params, '', '&')); }
         $result = curl_exec($ch);
         if ($result === false) {
