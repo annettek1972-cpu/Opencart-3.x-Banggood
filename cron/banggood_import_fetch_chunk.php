@@ -354,6 +354,8 @@ try {
 
     // Banggood docs: 20 products max per page.
     $api_page_size = 20;
+    $fetchError = '';
+    $fetchErrorCode = 0;
 
     for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunkSize; $ci++) {
         $cat_id = isset($rows[$ci]['cat_id']) ? (string)$rows[$ci]['cat_id'] : '';
@@ -365,8 +367,15 @@ try {
 
         while (count($collected) < $chunkSize) {
             $res = $bgModel->fetchProductList($cat_id, $currentPage, $api_page_size);
-            if (!$res || (!empty($res['errors']) && is_array($res['errors']))) {
-                break;
+            if (!$res) {
+                $fetchError = 'Failed to fetch product list (empty response).';
+                break 2;
+            }
+            if (!empty($res['errors'])) {
+                $fetchError = is_array($res['errors']) ? implode('; ', $res['errors']) : (string)$res['errors'];
+                $fetchErrorCode = $bg_extract_code($fetchError);
+                // Fail fast: do NOT continue iterating categories when Banggood is rejecting requests
+                break 2;
             }
 
             $products = (!empty($res['products']) && is_array($res['products'])) ? $res['products'] : [];
@@ -410,6 +419,28 @@ try {
         $next_category_index = $ci + 1;
         $next_page = 1;
         $next_offset = 0;
+    }
+
+    // If we hit a Banggood/API error while fetching, stop immediately so cron doesn't "run forever".
+    if ($fetchError !== '') {
+        $cursorNew = json_encode(['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset]);
+        $bg_write_cron_status([
+            'ran_at' => gmdate('c'),
+            'ok' => false,
+            'source' => 'cron',
+            'chunk_size' => (int)$chunkSize,
+            'fetched' => (int)count($collected),
+            'persisted' => 0,
+            'claimed' => 0,
+            'imported' => 0,
+            'errors' => 1,
+            'first_error' => $fetchError,
+            'api_code' => (int)$fetchErrorCode,
+            'finished' => false,
+            'next_cursor' => $cursorNew,
+        ]);
+        fwrite(STDERR, "Banggood fetch error" . ($fetchErrorCode ? " (code={$fetchErrorCode})" : "") . ": {$fetchError}\n");
+        exit(3);
     }
 
     if ($next_category_index >= $total_categories) {
