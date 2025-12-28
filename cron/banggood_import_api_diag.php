@@ -58,6 +58,24 @@ if (!is_file($adminConfig)) {
 
 require_once $adminConfig;
 
+// Load OpenCart core classes (DB, etc.)
+if (!defined('DIR_SYSTEM')) {
+    fwrite(STDERR, "DIR_SYSTEM not defined after loading admin/config.php\n");
+    exit(1);
+}
+
+// Ensure OpenCart VERSION constant exists (some environments rely on it)
+if (!defined('VERSION')) {
+    define('VERSION', '3.0.0.0');
+}
+
+$startup = rtrim((string)DIR_SYSTEM, '/\\') . '/startup.php';
+if (!is_file($startup)) {
+    fwrite(STDERR, "Missing startup.php at: {$startup}\n");
+    exit(1);
+}
+require_once $startup;
+
 if (!defined('DB_PREFIX')) {
     fwrite(STDERR, "DB constants not loaded from admin/config.php\n");
     exit(1);
