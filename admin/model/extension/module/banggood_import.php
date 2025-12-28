@@ -770,12 +770,12 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         // - pending
         // - updated where updated_at is NULL (if column exists), otherwise include updated too.
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
-        // Use TRIM to avoid issues with accidental whitespace in status.
-        $where = "TRIM(`status`) = 'pending'";
+        // Use LOWER(TRIM()) to avoid whitespace/case issues in status values.
+        $where = "LOWER(TRIM(COALESCE(`status`, ''))) = 'pending'";
         if ($updatedCol) {
-            $where .= " OR (TRIM(`status`) = 'updated' AND `" . $updatedCol . "` IS NULL)";
+            $where .= " OR (LOWER(TRIM(COALESCE(`status`, ''))) = 'updated' AND `" . $updatedCol . "` IS NULL)";
         } else {
-            $where .= " OR TRIM(`status`) = 'updated'";
+            $where .= " OR LOWER(TRIM(COALESCE(`status`, ''))) = 'updated'";
         }
 
         // IMPORTANT: process newest pending first so the top-of-list pending items get imported on the next run.

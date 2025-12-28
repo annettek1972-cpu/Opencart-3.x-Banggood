@@ -35,7 +35,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $qr = $this->db->query(
             "SELECT `id`, `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
              FROM `" . $tbl . "`
-             ORDER BY (`status` = 'pending') DESC,
+             ORDER BY (LOWER(TRIM(COALESCE(`status`, ''))) = 'pending') DESC,
                       (CASE WHEN `fetched_at` IS NULL OR `fetched_at` = '' THEN 0 ELSE UNIX_TIMESTAMP(`fetched_at`) END) DESC,
                       `id` DESC
              LIMIT " . (int)$limit
@@ -1337,7 +1337,7 @@ HTML;
             $qr = $this->db->query(
                 "SELECT `id`, `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
                  FROM `" . $tbl . "`
-                 ORDER BY (`status` = 'pending') DESC,
+                 ORDER BY (LOWER(TRIM(COALESCE(`status`, ''))) = 'pending') DESC,
                           (CASE WHEN `fetched_at` IS NULL OR `fetched_at` = '' THEN 0 ELSE UNIX_TIMESTAMP(`fetched_at`) END) DESC,
                           `id` DESC
                  LIMIT " . (int)$offset . "," . (int)$limit
