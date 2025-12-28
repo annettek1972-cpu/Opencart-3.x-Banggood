@@ -2066,6 +2066,10 @@ protected function apiRequestRawSimple($url) {
        Debug logger (tries multiple locations then error_log)
        ------------------------- */
     protected function writeDebugLog($bg_id, array $diagnostics) {
+        // Disabled to prevent log files from consuming disk space.
+        // (Import behavior is unaffected; errors still surface via UI/Exceptions.)
+        return;
+
         $filename = 'banggood_import_debug_' . preg_replace('/[^0-9A-Za-z_.-]/', '_', $bg_id) . '.log';
         $entry = array('ts' => date('c'), 'diagnostics' => $diagnostics);
         $json = json_encode($entry, JSON_PRETTY_PRINT) . PHP_EOL;

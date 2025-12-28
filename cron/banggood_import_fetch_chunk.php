@@ -188,31 +188,11 @@ try {
 try {
     // OpenCart Log expects a filename (it prepends DIR_LOGS internally).
     // If error_filename is empty/misconfigured, Log would try to fopen() a directory and warn.
-    $logFile = (string)$config->get('error_filename');
-    $logFile = trim($logFile);
-    if ($logFile === '' || substr($logFile, -1) === '/' || substr($logFile, -1) === '\\') {
-        $logFile = 'banggood_cron.log';
-    }
-    // If the log path isn't writable (common when previous runs were as root), avoid warnings by using a null logger.
-    $canLog = true;
-    if (defined('DIR_LOGS')) {
-        $logDir = (string)DIR_LOGS;
-        $logPath = rtrim($logDir, '/\\') . DIRECTORY_SEPARATOR . $logFile;
-        if (!is_dir($logDir) || !is_writable($logDir)) {
-            $canLog = false;
-        } elseif (file_exists($logPath) && !is_writable($logPath)) {
-            $canLog = false;
-        }
-    }
-
-    if ($canLog) {
-        $registry->set('log', new Log($logFile));
-    } else {
-        // Minimal logger compatible with `$this->log->write(...)` calls in OC models.
-        $registry->set('log', new class {
-            public function write($message) { /* no-op */ }
-        });
-    }
+    // Disabled to avoid creating/expanding cron log files on disk.
+    // Minimal logger compatible with `$this->log->write(...)` calls in OC models.
+    $registry->set('log', new class {
+        public function write($message) { /* no-op */ }
+    });
 } catch (Throwable $e) {
     // ignore
 }
