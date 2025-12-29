@@ -4040,17 +4040,13 @@ protected function apiRequestRawSimple($url) {
     }
 
     /* -------------------------
-       Image cache generation helper (creates OpenCart cache via model_tool_image->resize)
-       - Safe: checks file existence and wraps calls in try/catch
+       Image cache generation helper (creates OpenCart cache files)
+       - Generates the same /image/cache/<path>-<w>x<h>.<ext> filenames OpenCart uses
+       - Uses Imagick so it never hits GD-WebP
        ------------------------- */
     protected function generateImageCacheForImages(array $images) {
         if (empty($images)) return;
-        try {
-            $this->load->model('tool/image');
-        } catch (Exception $e) {
-            error_log('Banggood: could not load model_tool_image: ' . $e->getMessage());
-            return;
-        }
+        if (!class_exists('Imagick')) return;
 
         // OpenCart 3.x uses *_width and *_height config keys.
         // We also add common Banggood POA sizes so option-image cache is warmed immediately.
@@ -4093,17 +4089,65 @@ protected function apiRequestRawSimple($url) {
         $addSize(360, 360);
         $addSize(600, 600);
 
+        // Determine extension for cached images (many installs use WebP via config_image_extension).
+        $cfgExt = (string)$this->config->get('config_image_extension');
+        if ($cfgExt === '') $cfgExt = (string)$this->config->get('config_image_default_extension');
+        $cfgExt = strtolower(trim($cfgExt, " .\t\n\r\0\x0B"));
+
         foreach ($images as $img) {
             $img_rel = $this->toRelativeImagePath($img);
             if (!$img_rel) continue;
             $full = DIR_IMAGE . $img_rel;
             if (!is_file($full)) continue;
+            $srcMtime = @filemtime($full) ?: 0;
+
+            $srcExt = strtolower((string)pathinfo($img_rel, PATHINFO_EXTENSION));
+            $outExt = $cfgExt !== '' ? $cfgExt : ($srcExt !== '' ? $srcExt : 'jpg');
+            $baseNoExt = $img_rel;
+            $dotPos = strrpos($baseNoExt, '.');
+            if ($dotPos !== false) $baseNoExt = substr($baseNoExt, 0, $dotPos);
+
             foreach ($sizes as $s) {
                 if ((int)$s['w'] <= 0 || (int)$s['h'] <= 0) continue;
+                $w = (int)$s['w'];
+                $h = (int)$s['h'];
+                $cacheRel = 'cache/' . $baseNoExt . '-' . $w . 'x' . $h . '.' . $outExt;
+                $cacheFull = DIR_IMAGE . $cacheRel;
+
+                if (is_file($cacheFull)) {
+                    $cacheMtime = @filemtime($cacheFull) ?: 0;
+                    if ($cacheMtime >= $srcMtime) continue;
+                }
+
+                $dir = dirname($cacheFull);
+                if (!is_dir($dir)) @mkdir($dir, 0777, true);
+
                 try {
-                    $this->model_tool_image->resize($img_rel, (int)$s['w'], (int)$s['h']);
-                } catch (Exception $e) {
-                    error_log('Banggood: resize error for ' . $img_rel . ' ' . $s['w'] . 'x' . $s['h'] . ' - ' . $e->getMessage());
+                    $im = new \Imagick();
+                    $im->readImage($full);
+
+                    // Resize preserving aspect ratio
+                    $im->thumbnailImage($w, $h, true, true);
+                    $newW = (int)$im->getImageWidth();
+                    $newH = (int)$im->getImageHeight();
+
+                    // Canvas and composite centered
+                    $canvas = new \Imagick();
+                    $bg = (in_array($outExt, array('jpg','jpeg'), true)) ? 'white' : 'transparent';
+                    $canvas->newImage($w, $h, new \ImagickPixel($bg), $outExt);
+                    $x = (int)(($w - $newW) / 2);
+                    $y = (int)(($h - $newH) / 2);
+                    $canvas->compositeImage($im, \Imagick::COMPOSITE_OVER, $x, $y);
+
+                    if (in_array($outExt, array('jpg','jpeg','webp'), true)) {
+                        $canvas->setImageCompressionQuality(90);
+                    }
+                    $canvas->writeImage($cacheFull);
+
+                    $im->clear(); $im->destroy();
+                    $canvas->clear(); $canvas->destroy();
+                } catch (\Throwable $e) {
+                    // Best-effort only
                 }
             }
         }
