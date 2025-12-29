@@ -1109,6 +1109,18 @@ $(document).ready(function() {
       data: { limit: bgQueueLimit, page: bgQueuePage },
       success: function(json) {
         if (!json || json.error) return;
+        // Update cron/queue status banner live
+        if ($('#bg-cron-status').length && typeof json.queue_error !== 'undefined') {
+          var pending = parseInt(json.queue_pending, 10) || 0;
+          var processing = parseInt(json.queue_processing, 10) || 0;
+          var imported = parseInt(json.queue_imported, 10) || 0;
+          var errors = parseInt(json.queue_error, 10) || 0;
+          var hasErr = errors > 0;
+          $('#bg-cron-status')
+            .css('background', hasErr ? '#d9534f' : '#5cb85c')
+            .css('color', '#fff')
+            .html('<strong>Cron</strong> — Pending: ' + pending + ', Processing: ' + processing + ', Imported: ' + imported + ', Errors: ' + errors);
+        }
         if (typeof json.total_count !== 'undefined') {
           $('#bg-persisted-count').text('(' + (json.total_count || 0) + ')');
         }
