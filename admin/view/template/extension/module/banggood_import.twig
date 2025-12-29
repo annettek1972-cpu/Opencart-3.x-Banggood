@@ -915,57 +915,82 @@ $('#btn-fetch-chunk').on('click', function(e){
   if (count > 500) count = 500;
 
   $btn.prop('disabled', true);
-  $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+  $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
 
+  // IMPORTANT: Clear existing pending/processing backlog FIRST.
+  // If anything was processed, do not fetch new product IDs in this click.
   $.ajax({
-    url: fetchChunkUrl,
+    url: processFetchedUrl,
     type: 'post',
     dataType: 'json',
-    data: {
-      chunk_size: count
-    },
-    success: function(json) {
-      if (json.error) {
-        $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
-        return;
-      }
-      if (json.finished) {
-        // continue, we still render the DB list below
-      }
-      if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
-        var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
-        if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
-        if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
-          msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
+    data: { limit: 10 },
+    success: function(pjson) {
+      try {
+        var processed = (pjson && typeof pjson.processed !== 'undefined') ? parseInt(pjson.processed, 10) : 0;
+        if (processed > 0) {
+          // Refresh list and stop here: we only clear backlog this click.
+          try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+          $panel.prepend('<div class="alert alert-info">Queue processed first: ' + processed + '</div>');
+          return;
         }
-        if (json.finished) msg += ' • End of list';
-        // Replace panel with status + DB-backed list HTML
-        $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
-      }
-      if (json.html) $panel.append(json.html);
+      } catch(e) {}
 
-      // Immediately import 1 queued item after fetch so products actually get inserted without long timeouts.
-      // IMPORTANT: trigger even if persisted=0 (common when the fetched IDs were already queued as pending).
+      // Nothing pending to process -> now fetch next chunk
+      $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
       $.ajax({
-        url: processFetchedUrl,
+        url: fetchChunkUrl,
         type: 'post',
         dataType: 'json',
-        data: { limit: 1 },
-        success: function(pjson) {
-          if (pjson && pjson.error) {
-            $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+        data: {
+          chunk_size: count
+        },
+        success: function(json) {
+          if (json.error) {
+            $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
             return;
           }
-          // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
-          try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+          if (json.finished) {
+            // continue, we still render the DB list below
+          }
+          if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
+            var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+            if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
+            if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
+              msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
+            }
+            if (json.finished) msg += ' • End of list';
+            // Replace panel with status + DB-backed list HTML
+            $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
+          }
+          if (json.html) $panel.append(json.html);
+
+          // Immediately import 1 queued item after fetch so products actually get inserted without long timeouts.
+          // IMPORTANT: trigger even if persisted=0 (common when the fetched IDs were already queued as pending).
+          $.ajax({
+            url: processFetchedUrl,
+            type: 'post',
+            dataType: 'json',
+            data: { limit: 1 },
+            success: function(pjson2) {
+              if (pjson2 && pjson2.error) {
+                $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson2.error + '</div>');
+                return;
+              }
+              // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
+              try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+            },
+            error: function(xhr, status, err) {
+              $panel.prepend('<div class="alert alert-danger">Import AJAX error: ' + (err || status) + '</div>');
+            }
+          });
         },
         error: function(xhr, status, err) {
-          $panel.prepend('<div class="alert alert-danger">Import AJAX error: ' + (err || status) + '</div>');
+          $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
         }
       });
     },
     error: function(xhr, status, err) {
-      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      $panel.prepend('<div class="alert alert-danger">Queue process AJAX error: ' + (err || status) + '</div>');
     },
     complete: function() {
       $btn.prop('disabled', false);
