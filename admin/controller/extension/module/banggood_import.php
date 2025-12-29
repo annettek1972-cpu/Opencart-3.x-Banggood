@@ -2292,31 +2292,83 @@ HTML;
             if ($limit < 1) $limit = 1;
             if ($limit > 10) $limit = 10; // keep web requests short
 
-            // Require the model helpers so we don't accidentally call older importProductUrl() with a product ID
-            // (which will fail and mark everything as error).
-            if (!method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
-                $this->response->setOutput(json_encode(array('error' => 'Model method fetchPendingForProcessing missing (update admin/model/extension/module/banggood_import.php)')));
+            // Robust queue processing:
+            // - Prefer model helpers when present.
+            // - If the live store is still using an older model (OCMOD cache/override), fall back safely:
+            //   - claim pending rows via controller SQL
+            //   - import via importProductById when available, else importProductUrl with a synthetic Banggood URL
+            // This avoids "method missing" hard failures and prevents passing a product_id into importProductUrl().
+            $tbl = $this->getFetchedProductsTableName();
+            $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
+            $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+
+            $rows = array();
+            if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
+                $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
+            } else {
+                $this->ensureFetchedProductsTableExistsController();
+                $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                if ($q && $q->num_rows) {
+                    $statusExpr = "LOWER(TRIM(IFNULL(`status`,'')))";
+                    $where = "(" . $statusExpr . " = '' OR " . $statusExpr . " = 'pending')";
+                    if ($updatedCol) {
+                        $where .= " OR (" . $statusExpr . " = 'updated' AND `" . $updatedCol . "` IS NULL)";
+                    } else {
+                        $where .= " OR (" . $statusExpr . " = 'updated')";
+                    }
+                    $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
+                    $rows = $qr ? $qr->rows : array();
+                    if (!empty($rows)) {
+                        $ids = array();
+                        foreach ($rows as $r) if (isset($r['id'])) $ids[] = (int)$r['id'];
+                        if (!empty($ids)) {
+                            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+                        }
+                    }
+                }
+            }
+
+            $canImportById = method_exists($this->model_extension_module_banggood_import, 'importProductById');
+            $canImportByUrl = method_exists($this->model_extension_module_banggood_import, 'importProductUrl');
+            if (!$canImportById && !$canImportByUrl) {
+                $this->response->setOutput(json_encode(array('error' => 'Model import methods missing (need importProductById or importProductUrl)')));
                 return;
             }
-            if (!method_exists($this->model_extension_module_banggood_import, 'importProductById')) {
-                $this->response->setOutput(json_encode(array('error' => 'Model method importProductById missing (update admin/model/extension/module/banggood_import.php)')));
-                return;
-            }
-            $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
 
             foreach ($rows as $row) {
                 $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                 if (!$bgid) continue;
                 try {
-                    $this->model_extension_module_banggood_import->importProductById($bgid);
+                    if ($canImportById) {
+                        $this->model_extension_module_banggood_import->importProductById($bgid);
+                    } else {
+                        // Use a synthetic URL that matches Banggood URL regex extractors in older models.
+                        $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
+                        $this->model_extension_module_banggood_import->importProductUrl($url);
+                    }
+
                     if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
                         $this->model_extension_module_banggood_import->markFetchedProductImported($bgid);
+                    } else {
+                        $now = date('Y-m-d H:i:s');
+                        $curStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
+                        if ($curStatus === 'updated') {
+                            $set = array("`status` = 'updated'", "`last_error` = NULL");
+                            if ($updatedCol) $set[] = "`" . $updatedCol . "` = '" . $this->db->escape($now) . "'";
+                            $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
+                        } else {
+                            $set = array("`status` = 'imported'", "`last_error` = NULL");
+                            if ($importedCol) $set[] = "`" . $importedCol . "` = '" . $this->db->escape($now) . "'";
+                            $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
+                        }
                     }
                     $results['success']++;
                 } catch (Exception $e) {
                     if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
                         $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage());
+                    } else {
+                        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$e->getMessage()) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
                     }
                     $results['errors']++;
                 }
