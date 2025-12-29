@@ -2293,8 +2293,6 @@ HTML;
 
         // Ensure we always return valid JSON even if PHP emits notices/warnings.
         // Some hosts have display_errors enabled, which can corrupt JSON responses and cause JSON.parse errors.
-        $hadOb = false;
-        try { $hadOb = (bool)ob_get_level(); } catch (\Throwable $e) { $hadOb = false; }
         @ob_start();
 
         try {
@@ -2384,15 +2382,12 @@ HTML;
             }
 
             // Discard any stray output and return clean JSON
-            try { @ob_clean(); } catch (\Throwable $e) {}
+            try { @ob_end_clean(); } catch (\Throwable $e) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $x) {} }
             $this->response->setOutput(json_encode($results));
         } catch (\Exception $e) {
-            try { @ob_clean(); } catch (\Throwable $x) {}
+            try { @ob_end_clean(); } catch (\Throwable $x) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $y) {} }
             $this->response->setOutput(json_encode(array('error' => 'processFetchedProducts failed: ' . $e->getMessage())));
         }
-
-        // End our buffer (do not echo it)
-        try { @ob_end_flush(); } catch (\Throwable $e) { try { @ob_end_clean(); } catch (\Throwable $x) {} }
     }
 
     protected function validate() {

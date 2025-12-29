@@ -976,7 +976,16 @@ $('#btn-fetch-chunk').on('click', function(e){
           try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
         },
         error: function(xhr, status, err) {
-          $panel.prepend('<div class="alert alert-danger">Import AJAX error: ' + (err || status) + '</div>');
+          var msg = 'Import AJAX error: ' + (err || status);
+          try { if (xhr && xhr.status) msg += ' (HTTP ' + xhr.status + ')'; } catch(e) {}
+          try {
+            if (xhr && typeof xhr.responseText === 'string' && xhr.responseText.length) {
+              msg += '<div style="margin-top:6px;font-size:12px;white-space:pre-wrap;max-height:160px;overflow:auto;border-top:1px solid rgba(0,0,0,.1);padding-top:6px;">' +
+                     $('<div/>').text(xhr.responseText.slice(0, 2000)).html() +
+                     '</div>';
+            }
+          } catch(e) {}
+          $panel.prepend('<div class="alert alert-danger">' + msg + '</div>');
         }
       });
     },
