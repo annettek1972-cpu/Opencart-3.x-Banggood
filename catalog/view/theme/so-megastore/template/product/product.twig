@@ -1343,6 +1343,9 @@ $(document).ready(function(){
   window.BG_OPTION_INIT_LOADED = true;
 
   var userTouched = false;
+  var didInit = false;
+  var programmatic = false;
+  var stopAt = (Date.now ? Date.now() : new Date().getTime()) + 2000; // hard stop after 2s
   function markTouched(e) {
     // Only treat real user actions as "touched"
     try { if (e && e.isTrusted === false) return; } catch (x) {}
@@ -1359,11 +1362,17 @@ $(document).ready(function(){
   });
   // Also stop auto-init once user makes a real change selection.
   $(document).on('change', '#product select[name^="option["], #product input[name^="option["]', function (e) {
+    // Ignore the change events we trigger ourselves during init
+    if (programmatic) return;
     markTouched(e);
   });
 
   function initOnce() {
-    if (userTouched) return;
+    var now = Date.now ? Date.now() : new Date().getTime();
+    if (userTouched || didInit || now > stopAt) return;
+
+    programmatic = true;
+    var changed = false;
 
     // SELECT: if empty, pick first non-empty option
     $('#product select[name^="option["]').each(function () {
@@ -1372,6 +1381,7 @@ $(document).ready(function(){
       var $opt = $sel.find('option').filter(function () { return $(this).val() !== ''; }).first();
       if ($opt.length) {
         $sel.val($opt.val());
+        changed = true;
         try { $sel.trigger('change'); } catch (e) {}
       }
     });
@@ -1390,6 +1400,7 @@ $(document).ready(function(){
       if ($first.length) {
         $group.prop('checked', false);
         $first.prop('checked', true);
+        changed = true;
         try { $first.trigger('change'); } catch (e) {}
       }
     }
@@ -1403,9 +1414,16 @@ $(document).ready(function(){
       var $firstCb = $checks.first();
       if ($firstCb.length) {
         $firstCb.prop('checked', true);
+        changed = true;
         try { $firstCb.trigger('change'); } catch (e) {}
       }
     });
+
+    programmatic = false;
+    if (changed) {
+      // Initialized defaults successfully once; never run again.
+      didInit = true;
+    }
   }
 
   // Run a few times to beat theme resets, then stop.
