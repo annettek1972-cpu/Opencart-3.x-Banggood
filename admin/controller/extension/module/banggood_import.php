@@ -2275,6 +2275,31 @@ HTML;
 
         $this->response->addHeader('Content-Type: application/json');
 
+        // Fail-safe: if a fatal error occurs (or output becomes blank), return JSON instead of an empty response.
+        // This prevents admin-side JSON.parse errors with HTTP 200.
+        $bg_json_sent = false;
+        try {
+            register_shutdown_function(function () use (&$bg_json_sent) {
+                if ($bg_json_sent) return;
+                $err = error_get_last();
+                if (!$err || !is_array($err)) return;
+                $type = isset($err['type']) ? (int)$err['type'] : 0;
+                $fatalTypes = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
+                if (!in_array($type, $fatalTypes, true)) return;
+
+                // Best-effort: clear any output buffer noise and return JSON.
+                try { while (ob_get_level() > 0) { @ob_end_clean(); } } catch (\Throwable $e) {}
+                if (!headers_sent()) {
+                    header('Content-Type: application/json');
+                    http_response_code(500);
+                }
+                $msg = isset($err['message']) ? (string)$err['message'] : 'Fatal error';
+                echo json_encode(array('error' => 'processFetchedProducts fatal: ' . $msg));
+            });
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
         // Ensure we always return valid JSON even if PHP emits notices/warnings.
         // Some hosts have display_errors enabled, which can corrupt JSON responses and cause JSON.parse errors.
         @ob_start();
@@ -2367,9 +2392,11 @@ HTML;
 
             // Discard any stray output and return clean JSON
             try { @ob_end_clean(); } catch (\Throwable $e) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $x) {} }
+            $bg_json_sent = true;
             $this->response->setOutput(json_encode($results));
         } catch (\Exception $e) {
             try { @ob_end_clean(); } catch (\Throwable $x) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $y) {} }
+            $bg_json_sent = true;
             $this->response->setOutput(json_encode(array('error' => 'processFetchedProducts failed: ' . $e->getMessage())));
         }
     }
