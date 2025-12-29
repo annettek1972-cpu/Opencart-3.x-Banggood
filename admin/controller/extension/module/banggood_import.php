@@ -1348,6 +1348,22 @@ HTML;
             if ($page_total > 0 && $page > $page_total) $page = $page_total;
             $offset = ($page - 1) * $limit;
 
+            // Return queue status counts so the cron banner can update live.
+            $qs = $this->db->query(
+                "SELECT
+                    SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                 FROM `" . $tbl . "`"
+            );
+            if ($qs && isset($qs->row)) {
+                $json['queue_pending'] = isset($qs->row['pending']) ? (int)$qs->row['pending'] : 0;
+                $json['queue_processing'] = isset($qs->row['processing']) ? (int)$qs->row['processing'] : 0;
+                $json['queue_imported'] = isset($qs->row['imported']) ? (int)$qs->row['imported'] : 0;
+                $json['queue_error'] = isset($qs->row['error']) ? (int)$qs->row['error'] : 0;
+            }
+
             $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
             $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
             $selectExtra = '';
