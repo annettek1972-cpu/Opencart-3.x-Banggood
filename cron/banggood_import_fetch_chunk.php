@@ -449,10 +449,12 @@ try {
     $skipped = 0;
 
     $rowsToProcess = [];
-    if (method_exists($bgModel, 'fetchPendingForProcessing')) {
+    // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
+    // Try the queue claim call first; fall back only if the call actually fails.
+    try {
         $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
-    } else {
-        // Fallback: process only the collected list (older installs)
+    } catch (Throwable $e) {
+        // Fallback: process only the collected list (older installs / queue helper unavailable)
         foreach ($collected as $p) {
             $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
             if ($pid === '') continue;
@@ -504,7 +506,7 @@ try {
                 }
             }
 
-            if (method_exists($bgModel, 'markFetchedProductImported')) $bgModel->markFetchedProductImported($pid);
+            try { $bgModel->markFetchedProductImported($pid); } catch (Throwable $e) {}
             $imported++;
 
             // Normalize result reporting across importProductById() and importProductUrl()
@@ -527,7 +529,7 @@ try {
                 fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$usedMode}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
-            if (method_exists($bgModel, 'markFetchedProductError')) $bgModel->markFetchedProductError($pid, $e->getMessage());
+            try { $bgModel->markFetchedProductError($pid, $e->getMessage()); } catch (Throwable $x) {}
             $import_errors++;
             if ($firstError === '') $firstError = $e->getMessage();
             if ($verbose) {
