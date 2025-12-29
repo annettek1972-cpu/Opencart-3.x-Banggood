@@ -2302,10 +2302,12 @@ HTML;
             $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
             $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
 
+            // OpenCart 3 loads models as a Proxy object. method_exists() is unreliable on Proxy.
+            // Try model queue helper first, fall back to controller SQL only if the call fails.
             $rows = array();
-            if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
+            try {
                 $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
-            } else {
+            } catch (\Throwable $e) {
                 $this->ensureFetchedProductsTableExistsController();
                 $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
                 if ($q && $q->num_rows) {
@@ -2328,56 +2330,37 @@ HTML;
                 }
             }
 
-            $canImportById = method_exists($this->model_extension_module_banggood_import, 'importProductById');
-            $canImportByUrl = method_exists($this->model_extension_module_banggood_import, 'importProductUrl');
-            if (!$canImportById && !$canImportByUrl) {
-                // Hard diagnostic: show what file/class is actually loaded at runtime.
-                // This helps detect wrong upload path/admin folder or any other loader mismatch.
-                $dbg = array(
-                    'class' => is_object($this->model_extension_module_banggood_import) ? get_class($this->model_extension_module_banggood_import) : null,
-                    'file' => null,
-                    'has_importProductById' => false,
-                    'has_importProductUrl' => false,
-                    'methods_head' => array()
-                );
-                try {
-                    $dbg['has_importProductById'] = method_exists($this->model_extension_module_banggood_import, 'importProductById');
-                    $dbg['has_importProductUrl'] = method_exists($this->model_extension_module_banggood_import, 'importProductUrl');
-                    if (is_object($this->model_extension_module_banggood_import)) {
-                        try {
-                            $rc = new \ReflectionClass($this->model_extension_module_banggood_import);
-                            $dbg['file'] = $rc->getFileName();
-                        } catch (\Throwable $e) {
-                            $dbg['file'] = null;
-                        }
-                        $m = @get_class_methods($this->model_extension_module_banggood_import);
-                        if (is_array($m)) $dbg['methods_head'] = array_slice($m, 0, 50);
-                    }
-                } catch (\Throwable $e) {}
-
-                $this->response->setOutput(json_encode(array(
-                    'error' => 'Model import methods missing (need importProductById or importProductUrl)',
-                    'debug' => $dbg
-                )));
-                return;
-            }
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
 
             foreach ($rows as $row) {
                 $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                 if (!$bgid) continue;
                 try {
-                    if ($canImportById) {
+                    // Prefer importing by ID; if not available, fall back to URL import.
+                    $importedOk = false;
+                    $lastImportError = null;
+                    try {
                         $this->model_extension_module_banggood_import->importProductById($bgid);
-                    } else {
-                        // Use a synthetic URL that matches Banggood URL regex extractors in older models.
-                        $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
-                        $this->model_extension_module_banggood_import->importProductUrl($url);
+                        $importedOk = true;
+                    } catch (\Throwable $e1) {
+                        $lastImportError = $e1;
+                        try {
+                            $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
+                            $this->model_extension_module_banggood_import->importProductUrl($url);
+                            $importedOk = true;
+                        } catch (\Throwable $e2) {
+                            $lastImportError = $e2;
+                        }
+                    }
+                    if (!$importedOk) {
+                        $msg = $lastImportError ? $lastImportError->getMessage() : 'Unknown import failure';
+                        throw new \Exception('Import failed: ' . $msg);
                     }
 
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
+                    // Mark success: try model helper; fall back to direct SQL if helper is missing (Proxy-safe).
+                    try {
                         $this->model_extension_module_banggood_import->markFetchedProductImported($bgid);
-                    } else {
+                    } catch (\Throwable $eMark) {
                         $now = date('Y-m-d H:i:s');
                         $curStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
                         if ($curStatus === 'updated') {
@@ -2392,9 +2375,10 @@ HTML;
                     }
                     $results['success']++;
                 } catch (Exception $e) {
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
+                    // Mark error: try model helper; fall back to direct SQL if helper is missing (Proxy-safe).
+                    try {
                         $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage());
-                    } else {
+                    } catch (\Throwable $eMark) {
                         $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$e->getMessage()) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
                     }
                     $results['errors']++;
