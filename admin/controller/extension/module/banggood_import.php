@@ -2001,6 +2001,10 @@ HTML;
             $imported = 0;
             $import_errors = 0;
             $fetch_error = '';
+            $api_calls = 0;
+            $max_api_calls = (int)$this->config->get('module_banggood_import_fetch_max_api_calls');
+            if ($max_api_calls <= 0) $max_api_calls = 2; // keep web requests fast to avoid 504
+            if ($max_api_calls > 10) $max_api_calls = 10;
 
             // Walk the global product list across categories, resuming from cursor.
             for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunk_size; $ci++) {
@@ -2014,6 +2018,14 @@ HTML;
                 $currentOffset = ($ci === $category_index) ? $offset : 0;
 
                 while (count($collected) < $chunk_size) {
+                    // Avoid long-running admin requests: limit number of Banggood API calls per click.
+                    $api_calls++;
+                    if ($api_calls > $max_api_calls) {
+                        $next_category_index = $ci;
+                        $next_page = $currentPage;
+                        $next_offset = $currentOffset;
+                        break 2;
+                    }
                     $res = $this->model_extension_module_banggood_import->fetchProductList($cat_id, $currentPage, $api_page_size);
                     if (!$res || !empty($res['errors'])) {
                         // Banggood code=12022: cannot query by this cat_id (root category). Skip it and move on.
@@ -2226,15 +2238,34 @@ HTML;
         $this->response->addHeader('Content-Type: application/json');
 
         try {
-            $secret = isset($this->request->get['s']) ? $this->request->get['s'] : '';
-            $configured_secret = $this->config->get('module_banggood_import_cron_secret');
-            if ($configured_secret && $secret !== $configured_secret) {
-                http_response_code(403);
-                $this->response->setOutput(json_encode(array('error' => 'Forbidden')));
-                return;
+            @set_time_limit(0);
+
+            // Allow admin AJAX calls (user_token + permission) OR cron secret calls.
+            $isAdmin = false;
+            try {
+                $hasToken = isset($this->request->get['user_token']) && $this->request->get['user_token'] !== '';
+                if ($hasToken && isset($this->user) && $this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                    $isAdmin = true;
+                }
+            } catch (\Throwable $e) {
+                $isAdmin = false;
             }
 
-            $limit = isset($this->request->get['limit']) ? (int)$this->request->get['limit'] : 10;
+            if (!$isAdmin) {
+                $secret = isset($this->request->get['s']) ? $this->request->get['s'] : '';
+                $configured_secret = $this->config->get('module_banggood_import_cron_secret');
+                if ($configured_secret && $secret !== $configured_secret) {
+                    http_response_code(403);
+                    $this->response->setOutput(json_encode(array('error' => 'Forbidden')));
+                    return;
+                }
+            }
+
+            $limit = 10;
+            if (isset($this->request->post['limit'])) $limit = (int)$this->request->post['limit'];
+            elseif (isset($this->request->get['limit'])) $limit = (int)$this->request->get['limit'];
+            if ($limit < 1) $limit = 1;
+            if ($limit > 10) $limit = 10; // keep web requests short
 
             if (!method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
                 $this->response->setOutput(json_encode(array('error' => 'Model method fetchPendingForProcessing missing')));
