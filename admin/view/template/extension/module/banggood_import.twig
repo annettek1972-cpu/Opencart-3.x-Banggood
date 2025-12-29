@@ -411,6 +411,7 @@ var getProductListUrl = '{{ ('index.php?route=extension/module/banggood_import/g
 var fetchChunkUrl = '{{ ('index.php?route=extension/module/banggood_import/fetchProductsChunk&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var resetFetchCursorUrl = '{{ ('index.php?route=extension/module/banggood_import/resetFetchCursor&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var fetchUpdatesUrl = '{{ ('index.php?route=extension/module/banggood_import/getProductUpdateList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var processFetchedUrl = '{{ ('index.php?route=extension/module/banggood_import/processFetchedProducts&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
@@ -942,6 +943,23 @@ $('#btn-fetch-chunk').on('click', function(e){
         $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
       }
       if (json.html) $panel.append(json.html);
+
+      // Immediately import 1 queued item after fetch so products actually get inserted without long timeouts.
+      var toProcess = 0;
+      try { toProcess = parseInt(json.persisted, 10) || 0; } catch(e) { toProcess = 0; }
+      if (toProcess > 0) {
+        $.ajax({
+          url: processFetchedUrl,
+          type: 'post',
+          dataType: 'json',
+          data: { limit: 1 },
+          success: function(pjson) {
+            if (pjson && pjson.error) {
+              $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+            }
+          }
+        });
+      }
     },
     error: function(xhr, status, err) {
       $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
