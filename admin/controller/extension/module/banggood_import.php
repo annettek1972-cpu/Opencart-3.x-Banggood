@@ -2132,12 +2132,32 @@ HTML;
             // Fetch should be fast and only persist IDs to the queue; importing should happen via cron/queue processing.
             $persist_tbl = $this->getFetchedProductsTableName();
             $persist_total = null;
+            $persist_pending = null;
+            $persist_processing = null;
+            $persist_imported = null;
+            $persist_error = null;
             $persist_db = null;
             try {
                 $dbRow = $this->db->query("SELECT DATABASE() AS db")->row;
                 $persist_db = isset($dbRow['db']) ? (string)$dbRow['db'] : null;
                 $qt = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $persist_tbl . "`");
                 $persist_total = isset($qt->row['cnt']) ? (int)$qt->row['cnt'] : null;
+
+                // Status counts (older installs sometimes have NULL/blank/uppercase status values)
+                $qs = $this->db->query(
+                    "SELECT
+                        SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'imported' OR LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS imported,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                     FROM `" . $persist_tbl . "`"
+                );
+                if ($qs && isset($qs->row)) {
+                    $persist_pending = isset($qs->row['pending']) ? (int)$qs->row['pending'] : null;
+                    $persist_processing = isset($qs->row['processing']) ? (int)$qs->row['processing'] : null;
+                    $persist_imported = isset($qs->row['imported']) ? (int)$qs->row['imported'] : null;
+                    $persist_error = isset($qs->row['error']) ? (int)$qs->row['error'] : null;
+                }
             } catch (\Throwable $e) {}
 
             // Save updated cursor back to settings so the next click continues where we left off.
@@ -2163,6 +2183,7 @@ HTML;
                     ' • DB=' . htmlspecialchars((string)$persist_db, ENT_QUOTES, 'UTF-8') .
                     ' • Table=' . htmlspecialchars((string)$persist_tbl, ENT_QUOTES, 'UTF-8') .
                     ' • TotalRows=' . htmlspecialchars((string)$persist_total, ENT_QUOTES, 'UTF-8') .
+                    ' • Pending=' . htmlspecialchars((string)$persist_pending, ENT_QUOTES, 'UTF-8') .
                     ' • Wrote=' . (int)$persisted .
                     ' • Import=cron';
             $html = '<div class="alert alert-info" style="margin-bottom:10px;">' . $diag . '</div>' . $html;
@@ -2174,6 +2195,10 @@ HTML;
             $json['persisted_tbl'] = $persist_tbl;
             $json['persist_db'] = $persist_db;
             $json['persist_total'] = $persist_total;
+            $json['queue_pending'] = $persist_pending;
+            $json['queue_processing'] = $persist_processing;
+            $json['queue_imported'] = $persist_imported;
+            $json['queue_error'] = $persist_error;
             $json['imported'] = 0;
             $json['import_errors'] = 0;
             $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset);

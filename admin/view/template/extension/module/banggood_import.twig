@@ -935,6 +935,7 @@ $('#btn-fetch-chunk').on('click', function(e){
       if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
         var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
         if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
+        if (typeof json.queue_pending !== 'undefined' && json.queue_pending !== null) msg += ' • Pending: ' + (json.queue_pending || 0);
         if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
           msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
         }
@@ -944,11 +945,13 @@ $('#btn-fetch-chunk').on('click', function(e){
       }
       if (json.html) $panel.append(json.html);
 
-      // If we fetched/persisted anything, immediately process 1 queued item to avoid "pending" confusion.
+      // If we fetched/persisted anything OR there are already pending rows, immediately process 1 queued item.
       // This keeps each request small, reducing 504 risk.
       var toProcess = 0;
       try { toProcess = parseInt(json.persisted, 10) || 0; } catch(e) { toProcess = 0; }
-      if (toProcess > 0) {
+      var pendingCount = 0;
+      try { pendingCount = parseInt(json.queue_pending, 10) || 0; } catch(e) { pendingCount = 0; }
+      if (toProcess > 0 || pendingCount > 0) {
         $btn.prop('disabled', true);
         $btn.html('<i class="fa fa-spinner fa-spin"></i> Importing...');
         $.ajax({
