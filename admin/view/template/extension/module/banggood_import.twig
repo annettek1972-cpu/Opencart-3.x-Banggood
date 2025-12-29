@@ -80,6 +80,17 @@
 
           <div class="col-md-8">
             {# Buttons moved to top of products column and sized like Update Categories #}
+            {# Cron/queue status banner (green OK / red error; white text on error) #}
+            {% set bg_cron_has_error = (bg_queue_error|default(0) > 0) %}
+            <div id="bg-cron-status"
+                 style="margin-bottom:10px;padding:8px 10px;border-radius:4px; color: {{ bg_cron_has_error ? '#fff' : '#fff' }}; background: {{ bg_cron_has_error ? '#d9534f' : '#5cb85c' }};">
+              <strong>Cron</strong> —
+              Pending: {{ bg_queue_pending|default(0) }},
+              Processing: {{ bg_queue_processing|default(0) }},
+              Imported: {{ bg_queue_imported|default(0) }},
+              Errors: {{ bg_queue_error|default(0) }}
+            </div>
+
             <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
@@ -855,6 +866,11 @@ $('#bg-mirror-badge').on('click', function(e) {
 // Keep overwrite-option-images hidden value in sync with checkbox (for reliable POST)
 $('#input-overwrite-option-images').on('change', function() {
   $('#input-overwrite-option-images-hidden').val($(this).prop('checked') ? '1' : '0');
+});
+
+// Keep delete-missing hidden value in sync with checkbox (for reliable POST)
+$('#input-delete-missing').on('change', function() {
+  $('#input-delete-missing-hidden').val($(this).prop('checked') ? '1' : '0');
 });
 
 // Load products for a single category (paged)

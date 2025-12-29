@@ -436,6 +436,25 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_fetched_products_total'] = (int)$total_count;
         // --- End: render persisted fetched products for initial view (compact one-line rows) ---
 
+        // Cron/queue status (simple): derived from queue counts so admin can monitor progress.
+        $data['bg_queue_pending'] = 0;
+        $data['bg_queue_processing'] = 0;
+        $data['bg_queue_imported'] = 0;
+        $data['bg_queue_error'] = 0;
+        try {
+            if (isset($this->model_extension_module_banggood_import) && method_exists($this->model_extension_module_banggood_import, 'getFetchedProductsStats')) {
+                $st = $this->model_extension_module_banggood_import->getFetchedProductsStats();
+                if (is_array($st)) {
+                    $data['bg_queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
+                    $data['bg_queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
+                    $data['bg_queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
+                    $data['bg_queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore; banner will show zeros
+        }
+
         // Expose update URL for JS (clean URL generation)
         $data['update_categories_url'] = $this->url->link(
             'extension/module/banggood_import/updateCategories',
