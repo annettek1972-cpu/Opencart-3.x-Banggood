@@ -2331,7 +2331,34 @@ HTML;
             $canImportById = method_exists($this->model_extension_module_banggood_import, 'importProductById');
             $canImportByUrl = method_exists($this->model_extension_module_banggood_import, 'importProductUrl');
             if (!$canImportById && !$canImportByUrl) {
-                $this->response->setOutput(json_encode(array('error' => 'Model import methods missing (need importProductById or importProductUrl)')));
+                // Hard diagnostic: show what file/class is actually loaded at runtime.
+                // This helps detect wrong upload path/admin folder or any other loader mismatch.
+                $dbg = array(
+                    'class' => is_object($this->model_extension_module_banggood_import) ? get_class($this->model_extension_module_banggood_import) : null,
+                    'file' => null,
+                    'has_importProductById' => false,
+                    'has_importProductUrl' => false,
+                    'methods_head' => array()
+                );
+                try {
+                    $dbg['has_importProductById'] = method_exists($this->model_extension_module_banggood_import, 'importProductById');
+                    $dbg['has_importProductUrl'] = method_exists($this->model_extension_module_banggood_import, 'importProductUrl');
+                    if (is_object($this->model_extension_module_banggood_import)) {
+                        try {
+                            $rc = new \ReflectionClass($this->model_extension_module_banggood_import);
+                            $dbg['file'] = $rc->getFileName();
+                        } catch (\Throwable $e) {
+                            $dbg['file'] = null;
+                        }
+                        $m = @get_class_methods($this->model_extension_module_banggood_import);
+                        if (is_array($m)) $dbg['methods_head'] = array_slice($m, 0, 50);
+                    }
+                } catch (\Throwable $e) {}
+
+                $this->response->setOutput(json_encode(array(
+                    'error' => 'Model import methods missing (need importProductById or importProductUrl)',
+                    'debug' => $dbg
+                )));
                 return;
             }
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
