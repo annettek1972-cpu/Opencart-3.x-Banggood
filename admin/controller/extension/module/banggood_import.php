@@ -437,18 +437,29 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         // --- End: render persisted fetched products for initial view (compact one-line rows) ---
 
         // Cron/queue status (simple): derived from queue counts so admin can monitor progress.
+        // IMPORTANT: models are loaded as Proxy objects in OC3, so method_exists() is unreliable.
+        // Read counts directly from the queue table so the banner reflects reality on page load.
         $data['bg_queue_pending'] = 0;
         $data['bg_queue_processing'] = 0;
         $data['bg_queue_imported'] = 0;
         $data['bg_queue_error'] = 0;
         try {
-            if (isset($this->model_extension_module_banggood_import) && method_exists($this->model_extension_module_banggood_import, 'getFetchedProductsStats')) {
-                $st = $this->model_extension_module_banggood_import->getFetchedProductsStats();
-                if (is_array($st)) {
-                    $data['bg_queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
-                    $data['bg_queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
-                    $data['bg_queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
-                    $data['bg_queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+            $tbl = $this->getFetchedProductsTableName();
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+            if ($q && $q->num_rows) {
+                $qs = $this->db->query(
+                    "SELECT
+                        SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                     FROM `" . $tbl . "`"
+                );
+                if ($qs && isset($qs->row)) {
+                    $data['bg_queue_pending'] = isset($qs->row['pending']) ? (int)$qs->row['pending'] : 0;
+                    $data['bg_queue_processing'] = isset($qs->row['processing']) ? (int)$qs->row['processing'] : 0;
+                    $data['bg_queue_imported'] = isset($qs->row['imported']) ? (int)$qs->row['imported'] : 0;
+                    $data['bg_queue_error'] = isset($qs->row['error']) ? (int)$qs->row['error'] : 0;
                 }
             }
         } catch (\Throwable $e) {
@@ -1349,6 +1360,10 @@ HTML;
             $offset = ($page - 1) * $limit;
 
             // Return queue status counts so the cron banner can update live.
+            $json['queue_pending'] = 0;
+            $json['queue_processing'] = 0;
+            $json['queue_imported'] = 0;
+            $json['queue_error'] = 0;
             $qs = $this->db->query(
                 "SELECT
                     SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
