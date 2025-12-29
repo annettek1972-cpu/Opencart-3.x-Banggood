@@ -961,8 +961,32 @@ $('#btn-fetch-chunk').on('click', function(e){
               $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
               return;
             }
-            // Force an immediate refresh so status flips from pending -> imported
-            try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+            // Force an immediate refresh so status flips from pending -> imported.
+            // NOTE: refreshPersistedQueueOnce is scoped inside a closure below, so call the endpoint directly.
+            $.ajax({
+              url: getFetchedProductsListPagedUrl,
+              type: 'post',
+              dataType: 'json',
+              data: { limit: bgQueueLimit, page: bgQueuePage },
+              success: function(qjson) {
+                if (qjson && !qjson.error && typeof qjson.html === 'string') {
+                  $('#banggood-products').html(qjson.html);
+                  if (typeof qjson.total_count !== 'undefined') {
+                    $('#bg-persisted-count').text('(' + (qjson.total_count || 0) + ')');
+                  }
+                  if (typeof qjson.page !== 'undefined' && typeof qjson.page_total !== 'undefined') {
+                    $('#bg-queue-page').text(String(qjson.page));
+                    $('#bg-queue-page-total').text(String(qjson.page_total));
+                  }
+                }
+              }
+            });
+          },
+          error: function(xhr, status, err) {
+            // Show why it didn't run (403/504/etc.)
+            var msg = 'Import AJAX error: ' + (err || status);
+            try { if (xhr && xhr.status) msg += ' (HTTP ' + xhr.status + ')'; } catch(e) {}
+            $panel.prepend('<div class="alert alert-danger">' + msg + '</div>');
           },
           complete: function() {
             $btn.prop('disabled', false);
