@@ -1328,6 +1328,12 @@ jQuery(function($) {
   // Make this robust against theme scripts that reset selections after DOM-ready.
   var AUTO_SELECT_MAX_TRIES = 10;
   var AUTO_SELECT_TRY = 0;
+  var BG_USER_TOUCHED_OPTIONS = false;
+
+  // If the user interacts, stop forcing selections.
+  $(document).on('change click', '#product select[name^="option["], #product input[name^="option["]', function () {
+    BG_USER_TOUCHED_OPTIONS = true;
+  });
 
   function unlockOptionsForSelection() {
     try {
@@ -1413,18 +1419,22 @@ jQuery(function($) {
   }
 
   function runAutoSelectOnce() {
+    if (BG_USER_TOUCHED_OPTIONS) return true;
     unlockOptionsForSelection();
     var initialPovIds = pickInitialVariantPovIds();
 
     // SELECTS: if empty, set from variant key; else first non-empty option
     $('#product select[name^="option["]').each(function () {
       var $select = $(this);
-      if ($select.val()) return;
       if (initialPovIds.length) {
         if (setSelectByPovIds($select, initialPovIds)) return;
       }
       var $firstOpt = $select.find('option').filter(function(){ return $(this).val() !== ''; }).first();
-      if ($firstOpt.length) $select.val($firstOpt.val()).trigger('change');
+      if ($firstOpt.length) {
+        $select.val($firstOpt.val());
+        // Some themes/plugins need both jQuery + native change
+        try { $select.trigger('change'); $select.trigger('change.select2'); } catch (e) {}
+      }
     });
 
     // RADIOS: for each radio group name, if none checked, pick from variant key; else first radio
@@ -1434,7 +1444,6 @@ jQuery(function($) {
     });
     for (var rn in radioNames) {
       if (!Object.prototype.hasOwnProperty.call(radioNames, rn)) continue;
-      if ($('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]:checked').length) continue;
       var $group = $('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]');
       if (!$group.length) continue;
       var $m = null;
@@ -1458,6 +1467,20 @@ jQuery(function($) {
       var $container = $(this);
       var $checks = $container.find('input[type="checkbox"][name^="option["]');
       if (!$checks.length) return;
+      // If we have an initial variant key, check those; otherwise check the first checkbox.
+      if (initialPovIds.length) {
+        var any = false;
+        $checks.each(function () {
+          var $c = $(this);
+          var ov = $c.data('ov');
+          if (ov !== undefined && ov !== null && String(ov) !== '' && initialPovIds.indexOf(String(ov)) !== -1) {
+            $c.prop('checked', true).trigger('change');
+            $c.closest('label').find('span.option-content-box').addClass('active');
+            any = true;
+          }
+        });
+        if (any) return;
+      }
       if ($checks.filter(':checked').length) return;
       var $firstCb = $checks.first();
       if ($firstCb.length) {
@@ -1485,6 +1508,19 @@ jQuery(function($) {
   // Kick off + retry after full load (some themes reset after images/scripts)
   setTimeout(scheduleAutoSelect, 0);
   $(window).on('load', function(){ setTimeout(scheduleAutoSelect, 0); });
+
+  // Also watch for theme scripts that rebuild the option DOM and re-run selection.
+  try {
+    var target = document.getElementById('product');
+    if (target && window.MutationObserver) {
+      var mo = new MutationObserver(function () {
+        if (BG_USER_TOUCHED_OPTIONS) return;
+        // If anything is missing a selection, retry.
+        setTimeout(scheduleAutoSelect, 50);
+      });
+      mo.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['value','checked','disabled','class','style'] });
+    }
+  } catch (e) {}
 
   // Trigger global price refresh / change handlers in case they depend on selection
   if (typeof ajax_price === 'function') {
