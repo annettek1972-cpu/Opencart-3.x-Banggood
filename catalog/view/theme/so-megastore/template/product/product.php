@@ -1326,14 +1326,19 @@ $(document).ready(function(){
 <script> 
 jQuery(function($) {
   // Make this robust against theme scripts that reset selections after DOM-ready.
-  var AUTO_SELECT_MAX_TRIES = 10;
-  var AUTO_SELECT_TRY = 0;
+  var AUTO_SELECT_MAX_MS = 12000; // keep trying for up to 12s
+  var AUTO_SELECT_STARTED_AT = Date.now ? Date.now() : new Date().getTime();
   var BG_USER_TOUCHED_OPTIONS = false;
 
-  // If the user interacts, stop forcing selections.
-  $(document).on('change click', '#product select[name^="option["], #product input[name^="option["]', function () {
+  // If the user truly interacts, stop forcing selections.
+  // IMPORTANT: do not treat our own programmatic `.trigger('change')` as user interaction.
+  function markUserTouched(e) {
+    try {
+      if (e && e.isTrusted === false) return;
+    } catch (x) {}
     BG_USER_TOUCHED_OPTIONS = true;
-  });
+  }
+  $(document).on('pointerdown mousedown keydown touchstart', '#product select[name^="option["], #product input[name^="option["]', markUserTouched);
 
   function unlockOptionsForSelection() {
     try {
@@ -1493,16 +1498,16 @@ jQuery(function($) {
   }
 
   function scheduleAutoSelect() {
-    AUTO_SELECT_TRY += 1;
     var done = false;
     try { done = runAutoSelectOnce(); } catch (e) { done = false; }
     if (done) {
       try { window.BG_VARIANT_AUTO_SELECTED = true; } catch (e) {}
       return;
     }
-    if (AUTO_SELECT_TRY >= AUTO_SELECT_MAX_TRIES) return;
-    var delay = AUTO_SELECT_TRY < 3 ? 50 : (AUTO_SELECT_TRY < 6 ? 200 : 600);
-    setTimeout(scheduleAutoSelect, delay);
+    // Stop after time window to avoid infinite loops.
+    var now = Date.now ? Date.now() : new Date().getTime();
+    if (now - AUTO_SELECT_STARTED_AT > AUTO_SELECT_MAX_MS) return;
+    setTimeout(scheduleAutoSelect, 250);
   }
 
   // Kick off + retry after full load (some themes reset after images/scripts)
