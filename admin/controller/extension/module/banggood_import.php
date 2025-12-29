@@ -2069,60 +2069,19 @@ HTML;
                 return;
             }
 
-            // Verify inserts hit the expected table name (helps diagnose prefix/escaping issues)
+            // IMPORTANT:
+            // Do NOT import inside this AJAX request.
+            // Importing products (importProductById) can take long enough to trigger a reverse-proxy timeout (504 Gateway Timeout).
+            // Fetch should be fast and only persist IDs to the queue; importing should happen via cron/queue processing.
             $persist_tbl = $this->getFetchedProductsTableName();
-            $persist_expected = 0;
-            $persist_found = 0;
             $persist_total = null;
             $persist_db = null;
             try {
-                // Which DB are we actually connected to?
                 $dbRow = $this->db->query("SELECT DATABASE() AS db")->row;
                 $persist_db = isset($dbRow['db']) ? (string)$dbRow['db'] : null;
-
                 $qt = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $persist_tbl . "`");
                 $persist_total = isset($qt->row['cnt']) ? (int)$qt->row['cnt'] : null;
-
-                if (!empty($collected)) {
-                    $ids = array();
-                    foreach ($collected as $p) {
-                        if (!empty($p['product_id'])) $ids[] = "'" . $this->db->escape((string)$p['product_id']) . "'";
-                    }
-                    $ids = array_values(array_unique($ids));
-                    $persist_expected = count($ids);
-                    if ($persist_expected > 0) {
-                        $qv = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $persist_tbl . "` WHERE `bg_product_id` IN (" . implode(',', $ids) . ")");
-                        $persist_found = isset($qv->row['cnt']) ? (int)$qv->row['cnt'] : 0;
-                    }
-                }
-            } catch (\Throwable $e) {
-                // non-fatal
-                $persist_found = 0;
-            }
-
-            // If we can't verify the rows exist in the expected table, stop here (avoid importing without queue record).
-            if ($persist_expected > 0 && $persist_found < $persist_expected) {
-                $json['error'] = 'Fetch queue write verification failed: expected ' . (int)$persist_expected . ' rows in ' . $persist_tbl . ' but found ' . (int)$persist_found . '. Not importing to avoid mismatch.';
-                $this->response->setOutput(json_encode($json));
-                return;
-            }
-
-            foreach ($collected as $p) {
-                $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
-                if ($pid === '') continue;
-                try {
-                    $this->model_extension_module_banggood_import->importProductById($pid);
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductImported($pid);
-                    }
-                    $imported++;
-                } catch (\Throwable $e) {
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductError($pid, $e->getMessage());
-                    }
-                    $import_errors++;
-                }
-            }
+            } catch (\Throwable $e) {}
 
             // Save updated cursor back to settings so the next click continues where we left off.
             $cursorNew = json_encode(array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset));
@@ -2148,7 +2107,7 @@ HTML;
                     ' • Table=' . htmlspecialchars((string)$persist_tbl, ENT_QUOTES, 'UTF-8') .
                     ' • TotalRows=' . htmlspecialchars((string)$persist_total, ENT_QUOTES, 'UTF-8') .
                     ' • Wrote=' . (int)$persisted .
-                    ' • Verified=' . (int)$persist_found . '/' . (int)$persist_expected;
+                    ' • Import=cron';
             $html = '<div class="alert alert-info" style="margin-bottom:10px;">' . $diag . '</div>' . $html;
 
             $json['success'] = true;
@@ -2156,11 +2115,10 @@ HTML;
             $json['html'] = $html;
             $json['persisted'] = (int)$persisted;
             $json['persisted_tbl'] = $persist_tbl;
-            $json['persist_check'] = array('expected' => (int)$persist_expected, 'found' => (int)$persist_found);
             $json['persist_db'] = $persist_db;
             $json['persist_total'] = $persist_total;
-            $json['imported'] = (int)$imported;
-            $json['import_errors'] = (int)$import_errors;
+            $json['imported'] = 0;
+            $json['import_errors'] = 0;
             $json['next_position'] = array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset);
             $json['finished'] = (bool)$finished;
         } catch (\Exception $e) {
