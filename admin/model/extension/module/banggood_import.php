@@ -784,6 +784,19 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
 
+        // Re-queue stuck processing rows so they can be imported first.
+        // Use fetched_at as a conservative age check (older installs may not have processing timestamp).
+        try {
+            $this->db->query(
+                "UPDATE `" . $tbl . "`
+                 SET `status` = 'pending'
+                 WHERE `status` = 'processing'
+                   AND `fetched_at` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)"
+            );
+        } catch (\Throwable $e) {
+            // ignore; best-effort
+        }
+
         // Select rows needing processing:
         // - pending
         // - updated where updated_at is NULL (if column exists), otherwise include updated too.

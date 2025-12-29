@@ -931,7 +931,87 @@ $('#btn-fetch-chunk').on('click', function(e){
   if (count > 500) count = 500;
 
   $btn.prop('disabled', true);
-  $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+  $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
+
+  // Clear existing pending/processing FIRST (do not fetch new IDs until backlog is cleared).
+  var cyclesLeft = 10; // up to 10 imports per click (safe batch)
+  function drainQueueOnce() {
+    $.ajax({
+      url: processFetchedUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { limit: 1 },
+      success: function(pjson) {
+        if (pjson && pjson.error) {
+          $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+          return;
+        }
+        var processed = 0;
+        try { processed = parseInt(pjson && pjson.processed, 10) || 0; } catch(e) { processed = 0; }
+
+        // Refresh list UI
+        try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+
+        if (processed > 0 && cyclesLeft > 1) {
+          cyclesLeft--;
+          // continue draining
+          setTimeout(drainQueueOnce, 250);
+          return;
+        }
+
+        // No backlog (or batch limit reached) -> only fetch new IDs when backlog is empty
+        if (processed > 0) {
+          // We processed something; do not fetch new IDs this click.
+          return;
+        }
+
+        // Backlog empty -> now fetch next chunk
+        $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+        $.ajax({
+          url: fetchChunkUrl,
+          type: 'post',
+          dataType: 'json',
+          data: { chunk_size: count },
+          success: function(json) {
+            if (json.error) {
+              $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
+              return;
+            }
+            if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
+              var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+              if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
+              if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
+                msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
+              }
+              if (json.finished) msg += ' • End of list';
+              $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
+            }
+            if (json.html) $panel.append(json.html);
+
+            // Import the first newly queued item
+            cyclesLeft = 1;
+            drainQueueOnce();
+          },
+          error: function(xhr, status, err) {
+            $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+          }
+        });
+      },
+      error: function(xhr, status, err) {
+        $panel.prepend('<div class="alert alert-danger">Queue process AJAX error: ' + (err || status) + '</div>');
+      },
+      complete: function() {
+        // only re-enable when we didn't schedule more work
+        if (cyclesLeft <= 1) {
+          $btn.prop('disabled', false);
+          $btn.html('<i class="fa fa-download"></i> Fetch');
+        }
+      }
+    });
+  }
+
+  drainQueueOnce();
+  return;
 
   $.ajax({
     url: fetchChunkUrl,
