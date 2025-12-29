@@ -13,17 +13,33 @@
     return isNaN(n) ? 0 : n;
   }
 
+  // IMPORTANT:
+  // `oc_product_variant.option_key` in this repo is based on OpenCart `option_value_id`
+  // (your examples look like "3,9,12"), NOT `product_option_value_id` (often large).
+  // So we collect option_value_id from `data-ov` where available, falling back to the form value.
   function collectPovIds() {
     var ids = [];
 
     $('select[name^="option["]').each(function () {
-      var v = $(this).val();
+      var $sel = $(this);
+      var ov = $sel.find('option:selected').data('ov');
+      if (ov !== undefined && ov !== null && String(ov) !== '') {
+        ids.push(String(ov));
+        return;
+      }
+      var v = $sel.val();
       if (v) ids.push(String(v));
     });
 
     $('input[type="radio"][name^="option["]:checked, input[type="checkbox"][name^="option["]:checked').each(function () {
-      var v = $(this).val();
-      if (v) ids.push(String(v));
+      var $inp = $(this);
+      var ov2 = $inp.data('ov');
+      if (ov2 !== undefined && ov2 !== null && String(ov2) !== '') {
+        ids.push(String(ov2));
+        return;
+      }
+      var v2 = $inp.val();
+      if (v2) ids.push(String(v2));
     });
 
     // de-dupe

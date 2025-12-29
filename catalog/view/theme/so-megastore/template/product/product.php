@@ -1387,11 +1387,13 @@ jQuery(function($) {
     if (!$select || !$select.length) return false;
     var found = false;
     $select.find('option').each(function () {
-      var val = $(this).val();
-      if (val && povIds.indexOf(String(val)) !== -1) {
-        $select.val(val);
+      var $opt = $(this);
+      var ov = $opt.data('ov');
+      if (ov !== undefined && ov !== null && String(ov) !== '' && povIds.indexOf(String(ov)) !== -1) {
+        // select by the actual product_option_value_id value
+        $select.val($opt.val());
         found = true;
-        return false;
+        return false; // break
       }
     });
     if (found) $select.trigger('change');
@@ -1437,7 +1439,11 @@ jQuery(function($) {
       if (!$group.length) continue;
       var $m = null;
       if (initialPovIds.length) {
-        $m = $group.filter(function(){ return initialPovIds.indexOf(String($(this).val())) !== -1; }).first();
+        $m = $group.filter(function(){
+          var ov = $(this).data('ov');
+          if (ov !== undefined && ov !== null && String(ov) !== '') return initialPovIds.indexOf(String(ov)) !== -1;
+          return initialPovIds.indexOf(String($(this).val())) !== -1;
+        }).first();
       }
       if (!$m || !$m.length) $m = $group.first();
       if ($m && $m.length) {
