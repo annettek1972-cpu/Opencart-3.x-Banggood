@@ -1333,8 +1333,74 @@ $(document).ready(function(){
 });
 --></script> 
 <script>
-// Options are default-selected server-side in the template.
-// Do NOT auto-force selections in JS (it prevents customers changing options).
+// One-time option initializer:
+// - Some theme scripts reset options to blank after page load.
+// - We select the first value for each option group ONLY if nothing is selected.
+// - We never override once the user interacts.
+(function (window, $) {
+  if (!$) return;
+  if (window.BG_OPTION_INIT_LOADED) return;
+  window.BG_OPTION_INIT_LOADED = true;
+
+  var userTouched = false;
+  $(document).on('pointerdown mousedown keydown touchstart', '#product select[name^="option["], #product input[name^="option["]', function (e) {
+    try { if (e && e.isTrusted === false) return; } catch (x) {}
+    userTouched = true;
+  });
+
+  function initOnce() {
+    if (userTouched) return;
+
+    // SELECT: if empty, pick first non-empty option
+    $('#product select[name^="option["]').each(function () {
+      var $sel = $(this);
+      if ($sel.val()) return;
+      var $opt = $sel.find('option').filter(function () { return $(this).val() !== ''; }).first();
+      if ($opt.length) {
+        $sel.val($opt.val());
+        try { $sel.trigger('change'); } catch (e) {}
+      }
+    });
+
+    // RADIO: for each group, if none checked, check first
+    var radioNames = {};
+    $('#product input[type="radio"][name^="option["]').each(function () {
+      radioNames[$(this).attr('name')] = true;
+    });
+    for (var rn in radioNames) {
+      if (!Object.prototype.hasOwnProperty.call(radioNames, rn)) continue;
+      var $group = $('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]');
+      if (!$group.length) continue;
+      if ($group.filter(':checked').length) continue;
+      var $first = $group.first();
+      if ($first.length) {
+        $group.prop('checked', false);
+        $first.prop('checked', true);
+        try { $first.trigger('change'); } catch (e) {}
+      }
+    }
+
+    // CHECKBOX: if none checked in a container, check first
+    $('#product [id^="input-option"]').each(function () {
+      var $c = $(this);
+      var $checks = $c.find('input[type="checkbox"][name^="option["]');
+      if (!$checks.length) return;
+      if ($checks.filter(':checked').length) return;
+      var $firstCb = $checks.first();
+      if ($firstCb.length) {
+        $firstCb.prop('checked', true);
+        try { $firstCb.trigger('change'); } catch (e) {}
+      }
+    });
+  }
+
+  // Run a few times to beat theme resets, then stop.
+  $(function () {
+    setTimeout(initOnce, 0);
+    setTimeout(initOnce, 300);
+    setTimeout(initOnce, 1200);
+  });
+})(window, window.jQuery);
 </script>
 {# Removed: JS that prevented clicking out-of-stock options. #}
 
