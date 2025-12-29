@@ -1325,42 +1325,62 @@ $(document).ready(function(){
 --></script> 
 <script> 
 jQuery(function($) {
-  // Auto-select an initial valid variant combination (from oc_product_variant),
-  // falling back to the first option in each group if variant list isn't available.
-  try {
-    if (window.BG_VARIANT_AUTO_SELECTED) return;
-    window.BG_VARIANT_AUTO_SELECTED = true;
-  } catch (e) {}
+  // Make this robust against theme scripts that reset selections after DOM-ready.
+  var AUTO_SELECT_MAX_TRIES = 10;
+  var AUTO_SELECT_TRY = 0;
+
+  function unlockOptionsForSelection() {
+    try {
+      $('#product select, #product option, #product input[name^="option["]')
+        .prop('disabled', false)
+        .removeAttr('disabled')
+        .removeAttr('aria-disabled');
+      $('#product [data-available]').attr('data-available', '1').removeAttr('data-available');
+      $('#product [data-oos]').removeAttr('data-oos');
+      $('#product .disabled, #product .option-unavailable').removeClass('disabled option-unavailable');
+    } catch (e) {}
+  }
 
   function parseOptionKey(key) {
     key = String(key || '').trim();
     if (!key) return [];
-    // option_key can be "1|2|3" or "1,2,3"
     var parts = key.split(/[,\|\s;]+/);
     var out = [];
     for (var i = 0; i < parts.length; i++) {
       var n = parseInt(parts[i], 10);
       if (!isNaN(n) && n > 0) out.push(String(n));
     }
-    // de-dupe
     return out.filter(function (v, i, a) { return a.indexOf(v) === i; });
   }
 
   function pickInitialVariantPovIds() {
-    // `bg_variants` is injected later in this template; it'll exist by DOM-ready.
     var list = null;
     try { if (typeof bg_variants !== 'undefined') list = bg_variants; } catch (e) {}
     try { if (!list && window.bg_variants) list = window.bg_variants; } catch (e) {}
     try { if (!list && window.bgVariants) list = window.bgVariants; } catch (e) {}
     if (!Array.isArray(list) || !list.length) return [];
-
-    // IMPORTANT: Always select the first variant row even if out of stock.
-    // Stock is handled by disabling Add To Cart, not by preventing selection.
+    // Always first row (even if out of stock)
     for (var i = 0; i < list.length; i++) {
-      var v = list[i];
-      if (v && v.option_key) return parseOptionKey(v.option_key);
+      if (list[i] && list[i].option_key) return parseOptionKey(list[i].option_key);
     }
     return [];
+  }
+
+  function selectionComplete() {
+    var ok = true;
+    $('#product select[name^="option["]').each(function () {
+      if (!$(this).val()) ok = false;
+    });
+    if (!ok) return false;
+    var radioNames = {};
+    $('#product input[type="radio"][name^="option["]').each(function () {
+      radioNames[$(this).attr('name')] = true;
+    });
+    for (var name in radioNames) {
+      if (!Object.prototype.hasOwnProperty.call(radioNames, name)) continue;
+      if ($('#product input[type="radio"][name="' + name.replace(/"/g, '\\"') + '"]:checked').length === 0) return false;
+    }
+    return true;
   }
 
   function setSelectByPovIds($select, povIds) {
@@ -1371,127 +1391,94 @@ jQuery(function($) {
       if (val && povIds.indexOf(String(val)) !== -1) {
         $select.val(val);
         found = true;
-        return false; // break
+        return false;
       }
     });
     if (found) $select.trigger('change');
     return found;
   }
 
-  function setRadioByPovIds($container, povIds) {
-    var $radios = $container.find('input[type="radio"]');
-    if (!$radios.length) return false;
-    var $match = $radios.filter(function () { return povIds.indexOf(String($(this).val())) !== -1; }).first();
-    if (!$match.length) return false;
-
-    $radios.prop('checked', false);
-    $match.prop('checked', true).trigger('change');
-
-    // Keep theme visuals in sync
-    var $selectedWrap = $match.closest('.radio');
-    if ($selectedWrap.length) {
-      $container.find('.radio').not($selectedWrap).removeClass('active').find('span.option-content-box').removeClass('active');
-      $selectedWrap.addClass('active').find('span.option-content-box').addClass('active');
-    } else {
-      $container.find('span.option-content-box').removeClass('active');
-      $match.closest('label').find('span.option-content-box').addClass('active');
-    }
-    return true;
-  }
-
-  function setCheckboxesByPovIds($container, povIds) {
-    var $checks = $container.find('input[type="checkbox"]');
-    if (!$checks.length) return false;
-    var any = false;
-    $checks.each(function () {
-      var $c = $(this);
-      if (povIds.indexOf(String($c.val())) !== -1) {
-        $c.prop('checked', true).trigger('change');
-        $c.closest('label').find('span.option-content-box').addClass('active');
-        any = true;
+  function applyThemeActiveForRadio($radio) {
+    try {
+      var $container = $radio.closest('[id^="input-option"]');
+      if (!$container.length) return;
+      var $wrap = $radio.closest('.radio');
+      if ($wrap.length) {
+        $container.find('.radio').not($wrap).removeClass('active').find('span.option-content-box').removeClass('active');
+        $wrap.addClass('active').find('span.option-content-box').addClass('active');
       }
-    });
-    return any;
+    } catch (e) {}
   }
 
-  var initialPovIds = pickInitialVariantPovIds();
+  function runAutoSelectOnce() {
+    unlockOptionsForSelection();
+    var initialPovIds = pickInitialVariantPovIds();
 
-  // SELECT options: select matching variant value (or first non-empty)
-  $('#product select[name^="option["]').each(function () {
-    var $select = $(this);
-    if (initialPovIds.length) {
-      if (setSelectByPovIds($select, initialPovIds)) return;
-    }
-    var $firstOpt = $select.find('option').filter(function(){ return $(this).val() !== ''; }).first();
-    if ($firstOpt.length) $select.val($firstOpt.val()).trigger('change');
-  });
+    // SELECTS: if empty, set from variant key; else first non-empty option
+    $('#product select[name^="option["]').each(function () {
+      var $select = $(this);
+      if ($select.val()) return;
+      if (initialPovIds.length) {
+        if (setSelectByPovIds($select, initialPovIds)) return;
+      }
+      var $firstOpt = $select.find('option').filter(function(){ return $(this).val() !== ''; }).first();
+      if ($firstOpt.length) $select.val($firstOpt.val()).trigger('change');
+    });
 
-  // RADIO options: for each radio group name, select matching variant value (or first)
-  var radioNames = {};
-  $('#product input[type="radio"][name^="option["]').each(function () {
-    radioNames[$(this).attr('name')] = true;
-  });
-  for (var rn in radioNames) {
-    if (!Object.prototype.hasOwnProperty.call(radioNames, rn)) continue;
-    var $group = $('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]');
-    if (!$group.length) continue;
-    if (initialPovIds.length) {
-      var $m = $group.filter(function(){ return initialPovIds.indexOf(String($(this).val())) !== -1; }).first();
-      if ($m.length) {
+    // RADIOS: for each radio group name, if none checked, pick from variant key; else first radio
+    var radioNames = {};
+    $('#product input[type="radio"][name^="option["]').each(function () {
+      radioNames[$(this).attr('name')] = true;
+    });
+    for (var rn in radioNames) {
+      if (!Object.prototype.hasOwnProperty.call(radioNames, rn)) continue;
+      if ($('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]:checked').length) continue;
+      var $group = $('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]');
+      if (!$group.length) continue;
+      var $m = null;
+      if (initialPovIds.length) {
+        $m = $group.filter(function(){ return initialPovIds.indexOf(String($(this).val())) !== -1; }).first();
+      }
+      if (!$m || !$m.length) $m = $group.first();
+      if ($m && $m.length) {
         $group.prop('checked', false);
         $m.prop('checked', true).trigger('change');
-        // theme visuals
-        var $c = $m.closest('[id^="input-option"]');
-        if ($c.length) {
-          var $wrap = $m.closest('.radio');
-          if ($wrap.length) {
-            $c.find('.radio').not($wrap).removeClass('active').find('span.option-content-box').removeClass('active');
-            $wrap.addClass('active').find('span.option-content-box').addClass('active');
-          }
-        }
-        continue;
+        applyThemeActiveForRadio($m);
       }
     }
-    // fallback: first radio in group
-    var $first = $group.first();
-    if ($first.length) {
-      $group.prop('checked', false);
-      $first.prop('checked', true).trigger('change');
-      var $c2 = $first.closest('[id^="input-option"]');
-      if ($c2.length) {
-        var $w2 = $first.closest('.radio');
-        if ($w2.length) {
-          $c2.find('.radio').not($w2).removeClass('active').find('span.option-content-box').removeClass('active');
-          $w2.addClass('active').find('span.option-content-box').addClass('active');
-        }
-      }
-    }
-  }
 
-  // CHECKBOX options: check those in the variant key; if none, check first checkbox in each container
-  $('#product [id^="input-option"]').each(function () {
-    var $container = $(this);
-    var $checks = $container.find('input[type="checkbox"][name^="option["]');
-    if (!$checks.length) return;
-    var any = false;
-    if (initialPovIds.length) {
-      $checks.each(function () {
-        var $c = $(this);
-        if (initialPovIds.indexOf(String($c.val())) !== -1) {
-          $c.prop('checked', true).trigger('change');
-          $c.closest('label').find('span.option-content-box').addClass('active');
-          any = true;
-        }
-      });
-    }
-    if (!any) {
+    // CHECKBOXES: if none checked in a container, check first (keeps "first of each option" behavior)
+    $('#product [id^="input-option"]').each(function () {
+      var $container = $(this);
+      var $checks = $container.find('input[type="checkbox"][name^="option["]');
+      if (!$checks.length) return;
+      if ($checks.filter(':checked').length) return;
       var $firstCb = $checks.first();
       if ($firstCb.length) {
         $firstCb.prop('checked', true).trigger('change');
         $firstCb.closest('label').find('span.option-content-box').addClass('active');
       }
+    });
+
+    return selectionComplete();
+  }
+
+  function scheduleAutoSelect() {
+    AUTO_SELECT_TRY += 1;
+    var done = false;
+    try { done = runAutoSelectOnce(); } catch (e) { done = false; }
+    if (done) {
+      try { window.BG_VARIANT_AUTO_SELECTED = true; } catch (e) {}
+      return;
     }
-  });
+    if (AUTO_SELECT_TRY >= AUTO_SELECT_MAX_TRIES) return;
+    var delay = AUTO_SELECT_TRY < 3 ? 50 : (AUTO_SELECT_TRY < 6 ? 200 : 600);
+    setTimeout(scheduleAutoSelect, delay);
+  }
+
+  // Kick off + retry after full load (some themes reset after images/scripts)
+  setTimeout(scheduleAutoSelect, 0);
+  $(window).on('load', function(){ setTimeout(scheduleAutoSelect, 0); });
 
   // Trigger global price refresh / change handlers in case they depend on selection
   if (typeof ajax_price === 'function') {
