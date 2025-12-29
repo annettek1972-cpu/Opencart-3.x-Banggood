@@ -336,8 +336,21 @@ try {
         while (count($collected) < $chunkSize) {
             $res = $bgModel->fetchProductList($cat_id, $currentPage, $api_page_size);
             if (!$res || (!empty($res['errors']) && is_array($res['errors']))) {
-                // IMPORTANT: do not advance cursor on API errors; retry next run instead.
-                $fetch_error = (!$res ? 'Failed to fetch product list' : implode("; ", (array)$res['errors']));
+                $errText = (!$res ? 'Failed to fetch product list' : implode("; ", (array)$res['errors']));
+                $code = 0;
+                if (is_array($res) && isset($res['code'])) $code = (int)$res['code'];
+                if (!$code && preg_match('/code\\s*=\\s*(\\d+)/i', $errText, $m)) $code = (int)$m[1];
+
+                // Banggood code=12022: cannot query by this cat_id (root category). Skip it and move on.
+                if ($code === 12022 || (!empty($res['skippable_cat_id']))) {
+                    $next_category_index = $ci + 1;
+                    $next_page = 1;
+                    $next_offset = 0;
+                    break;
+                }
+
+                // IMPORTANT: do not advance cursor on other API errors; retry next run instead.
+                $fetch_error = $errText;
                 $next_category_index = $ci;
                 $next_page = $currentPage;
                 $next_offset = $currentOffset;

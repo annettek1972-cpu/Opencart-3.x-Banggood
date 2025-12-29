@@ -531,7 +531,20 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         return $result;
 
     } catch (\Exception $e) {
-        $result['errors'][] = 'Exception: ' . $e->getMessage();
+        $msg = $e->getMessage();
+        // Surface Banggood error codes in a machine-detectable way.
+        // Important: product/getProductList returns code=12022 for root categories (must use sub-category).
+        if (preg_match('/code\\s*=\\s*(\\d+)/i', (string)$msg, $m)) {
+            $result['code'] = (int)$m[1];
+        } elseif (preg_match('/\\b(\\d{5})\\b/', (string)$msg, $m)) {
+            $result['code'] = (int)$m[1];
+        }
+        if (!empty($result['code']) && (int)$result['code'] === 12022) {
+            $result['errors'][] = 'Banggood API error: code=12022 msg=Cannot query by this cat_id (use sub-category)';
+            $result['skippable_cat_id'] = true;
+        } else {
+            $result['errors'][] = 'Exception: ' . $msg;
+        }
         return $result;
     }
 }
