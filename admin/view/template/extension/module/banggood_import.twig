@@ -91,6 +91,9 @@
               Errors: {{ bg_queue_error|default(0) }}
             </div>
 
+            {# Sticky errors: never overwritten by live queue refresh #}
+            <div id="bg-sticky-errors" style="margin-bottom:10px;"></div>
+
             <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
@@ -925,6 +928,7 @@ $('#btn-fetch-chunk').on('click', function(e){
   e.preventDefault();
   var $btn = $(this);
   var $panel = $('#banggood-products');
+  var $sticky = $('#bg-sticky-errors');
   bgProductsMode = 'persisted';
   var count = parseInt($('#bg-fetch-count').val(), 10);
   if (!count || count < 1) count = 10;
@@ -969,7 +973,7 @@ $('#btn-fetch-chunk').on('click', function(e){
         data: { limit: 1 },
         success: function(pjson) {
           if (pjson && pjson.error) {
-            $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+            $sticky.html('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
             return;
           }
           // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
@@ -985,12 +989,12 @@ $('#btn-fetch-chunk').on('click', function(e){
                      '</div>';
             }
           } catch(e) {}
-          $panel.prepend('<div class="alert alert-danger">' + msg + '</div>');
+          $sticky.html('<div class="alert alert-danger">' + msg + '</div>');
         }
       });
     },
     error: function(xhr, status, err) {
-      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      $sticky.html('<div class="alert alert-danger">AJAX error: ' + err + '</div>');
     },
     complete: function() {
       $btn.prop('disabled', false);
