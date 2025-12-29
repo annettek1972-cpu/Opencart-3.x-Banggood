@@ -35,7 +35,15 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $qr = $this->db->query(
             "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
              FROM `" . $tbl . "`
-             ORDER BY `fetched_at` DESC, `id` DESC
+             ORDER BY
+               CASE
+                 WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
+                 WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
+                 WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
+                 WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 3
+                 ELSE 4
+               END ASC,
+               `fetched_at` DESC, `id` DESC
              LIMIT " . (int)$limit
         );
         $recent = $qr->rows;
@@ -1390,7 +1398,15 @@ HTML;
             $qr = $this->db->query(
                 "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
                  FROM `" . $tbl . "`
-                 ORDER BY `fetched_at` DESC, `id` DESC
+                 ORDER BY
+                   CASE
+                     WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
+                     WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
+                     WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
+                     WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 3
+                     ELSE 4
+                   END ASC,
+                   `fetched_at` DESC, `id` DESC
                  LIMIT " . (int)$offset . "," . (int)$limit
             );
             $rows = $qr->rows;
