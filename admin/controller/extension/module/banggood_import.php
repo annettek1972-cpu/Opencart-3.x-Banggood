@@ -2226,41 +2226,86 @@ HTML;
         $this->response->addHeader('Content-Type: application/json');
 
         try {
-            $secret = isset($this->request->get['s']) ? $this->request->get['s'] : '';
-            $configured_secret = $this->config->get('module_banggood_import_cron_secret');
-            if ($configured_secret && $secret !== $configured_secret) {
-                http_response_code(403);
-                $this->response->setOutput(json_encode(array('error' => 'Forbidden')));
-                return;
+            @set_time_limit(0);
+
+            // Allow admin AJAX calls (user_token + permission) OR cron secret calls.
+            $isAdmin = false;
+            try {
+                $hasToken = isset($this->request->get['user_token']) && $this->request->get['user_token'] !== '';
+                if ($hasToken && isset($this->user) && $this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                    $isAdmin = true;
+                }
+            } catch (\Throwable $e) {
+                $isAdmin = false;
             }
 
-            $limit = isset($this->request->get['limit']) ? (int)$this->request->get['limit'] : 10;
-
-            if (!method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
-                $this->response->setOutput(json_encode(array('error' => 'Model method fetchPendingForProcessing missing')));
-                return;
+            if (!$isAdmin) {
+                $secret = isset($this->request->get['s']) ? $this->request->get['s'] : '';
+                $configured_secret = $this->config->get('module_banggood_import_cron_secret');
+                if ($configured_secret && $secret !== $configured_secret) {
+                    http_response_code(403);
+                    $this->response->setOutput(json_encode(array('error' => 'Forbidden')));
+                    return;
+                }
             }
 
-            $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
+            $limit = 10;
+            if (isset($this->request->post['limit'])) $limit = (int)$this->request->post['limit'];
+            elseif (isset($this->request->get['limit'])) $limit = (int)$this->request->get['limit'];
+            if ($limit < 1) $limit = 1;
+            if ($limit > 10) $limit = 10; // keep web requests short
+
+            // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
+            // Try to claim pending rows via model helper; fall back to direct SQL only if it fails.
+            $rows = array();
+            try {
+                $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
+            } catch (\Throwable $e) {
+                // fallback: claim pending rows directly from queue table
+                $tbl = $this->getFetchedProductsTableName();
+                $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                if ($q && $q->num_rows) {
+                    $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE `status` = 'pending' ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
+                    $rows = $qr ? $qr->rows : array();
+                    if (!empty($rows)) {
+                        $ids = array();
+                        foreach ($rows as $r) if (isset($r['id'])) $ids[] = (int)$r['id'];
+                        if (!empty($ids)) $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+                    }
+                }
+            }
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
 
             foreach ($rows as $row) {
                 $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                 if (!$bgid) continue;
                 try {
-                    if (!method_exists($this->model_extension_module_banggood_import, 'importProductById')) {
-                        $this->model_extension_module_banggood_import->importProductUrl($bgid);
-                    } else {
+                    // Prefer importing by ID; if not available, fall back to URL import using a synthetic URL.
+                    $importedOk = false;
+                    $lastErr = null;
+                    try {
                         $this->model_extension_module_banggood_import->importProductById($bgid);
+                        $importedOk = true;
+                    } catch (\Throwable $e1) {
+                        $lastErr = $e1;
+                        try {
+                            $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
+                            $this->model_extension_module_banggood_import->importProductUrl($url);
+                            $importedOk = true;
+                        } catch (\Throwable $e2) {
+                            $lastErr = $e2;
+                        }
                     }
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductImported($bgid);
+                    if (!$importedOk) {
+                        $msg = $lastErr ? $lastErr->getMessage() : 'Import failed';
+                        throw new \Exception('Import failed: ' . $msg);
                     }
+
+                    // Mark queue row as imported
+                    try { $this->model_extension_module_banggood_import->markFetchedProductImported($bgid); } catch (\Throwable $e) {}
                     $results['success']++;
                 } catch (Exception $e) {
-                    if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
-                        $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage());
-                    }
+                    try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage()); } catch (\Throwable $x) {}
                     $results['errors']++;
                 }
                 $results['processed']++;
