@@ -2267,73 +2267,31 @@ HTML;
             if ($limit < 1) $limit = 1;
             if ($limit > 10) $limit = 10; // keep web requests short
 
-            // Prefer model helper, but support older deployments where the model hasn't been updated yet.
-            // In that case, fetch pending rows directly and mark them as processing.
-            $rows = array();
-            $tbl = $this->getFetchedProductsTableName();
-            $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
-            $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
-            if (method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
-                $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
-            } else {
-                $this->ensureFetchedProductsTableExistsController();
-                $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
-                if ($q && $q->num_rows) {
-                    $where = "`status` = 'pending'";
-                    if ($updatedCol) {
-                        $where .= " OR (`status` = 'updated' AND `" . $updatedCol . "` IS NULL)";
-                    } else {
-                        $where .= " OR `status` = 'updated'";
-                    }
-                    $qr = $this->db->query(
-                        "SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit
-                    );
-                    $rows = $qr ? $qr->rows : array();
-                    if (!empty($rows)) {
-                        $ids = array();
-                        foreach ($rows as $r) {
-                            if (isset($r['id'])) $ids[] = (int)$r['id'];
-                        }
-                        if (!empty($ids)) {
-                            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
-                        }
-                    }
-                }
+            // Require the model helpers so we don't accidentally call older importProductUrl() with a product ID
+            // (which will fail and mark everything as error).
+            if (!method_exists($this->model_extension_module_banggood_import, 'fetchPendingForProcessing')) {
+                $this->response->setOutput(json_encode(array('error' => 'Model method fetchPendingForProcessing missing (update admin/model/extension/module/banggood_import.php)')));
+                return;
             }
+            if (!method_exists($this->model_extension_module_banggood_import, 'importProductById')) {
+                $this->response->setOutput(json_encode(array('error' => 'Model method importProductById missing (update admin/model/extension/module/banggood_import.php)')));
+                return;
+            }
+            $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
 
             foreach ($rows as $row) {
                 $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
                 if (!$bgid) continue;
                 try {
-                    if (!method_exists($this->model_extension_module_banggood_import, 'importProductById')) {
-                        $this->model_extension_module_banggood_import->importProductUrl($bgid);
-                    } else {
-                        $this->model_extension_module_banggood_import->importProductById($bgid);
-                    }
+                    $this->model_extension_module_banggood_import->importProductById($bgid);
                     if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
                         $this->model_extension_module_banggood_import->markFetchedProductImported($bgid);
-                    } else {
-                        // Fallback: mark status in queue table directly
-                        $now = date('Y-m-d H:i:s');
-                        $curStatus = isset($row['status']) ? (string)$row['status'] : '';
-                        if ($curStatus === 'updated') {
-                            $set = array("`status` = 'updated'", "`last_error` = NULL");
-                            if ($updatedCol) $set[] = "`" . $updatedCol . "` = '" . $this->db->escape($now) . "'";
-                            $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
-                        } else {
-                            $set = array("`status` = 'imported'", "`last_error` = NULL");
-                            if ($importedCol) $set[] = "`" . $importedCol . "` = '" . $this->db->escape($now) . "'";
-                            $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
-                        }
                     }
                     $results['success']++;
                 } catch (Exception $e) {
                     if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductError')) {
                         $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage());
-                    } else {
-                        // Fallback: mark status in queue table directly
-                        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$e->getMessage()) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bgid) . "'");
                     }
                     $results['errors']++;
                 }
