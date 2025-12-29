@@ -961,7 +961,18 @@ $('#btn-fetch-chunk').on('click', function(e){
           data: { limit: 1 },
           success: function(pjson) {
             if (pjson && pjson.error) {
-              $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+              var dbgHtml = '';
+              try {
+                if (pjson.debug) {
+                  var file = (pjson.debug.file || '');
+                  var cls = (pjson.debug.class || '');
+                  dbgHtml = '<div style="margin-top:6px;font-size:12px;opacity:.9;">' +
+                    '<div><strong>Loaded model</strong>: ' + (cls ? cls : '(unknown)') + '</div>' +
+                    '<div><strong>Model file</strong>: ' + (file ? file : '(unknown)') + '</div>' +
+                    '</div>';
+                }
+              } catch(e) { dbgHtml = ''; }
+              $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + dbgHtml + '</div>');
               return;
             }
             // Force an immediate refresh so status flips from pending -> imported.
