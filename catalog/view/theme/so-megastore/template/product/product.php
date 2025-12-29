@@ -1354,16 +1354,13 @@ jQuery(function($) {
     try { if (!list && window.bgVariants) list = window.bgVariants; } catch (e) {}
     if (!Array.isArray(list) || !list.length) return [];
 
-    // Prefer first in-stock variant; otherwise first row.
-    var chosen = null;
+    // IMPORTANT: Always select the first variant row even if out of stock.
+    // Stock is handled by disabling Add To Cart, not by preventing selection.
     for (var i = 0; i < list.length; i++) {
       var v = list[i];
-      if (!v || !v.option_key) continue;
-      var qty = parseInt(v.quantity, 10);
-      if (!isNaN(qty) && qty > 0) { chosen = v; break; }
-      if (!chosen) chosen = v;
+      if (v && v.option_key) return parseOptionKey(v.option_key);
     }
-    return chosen && chosen.option_key ? parseOptionKey(chosen.option_key) : [];
+    return [];
   }
 
   function setSelectByPovIds($select, povIds) {
@@ -1419,54 +1416,80 @@ jQuery(function($) {
 
   var initialPovIds = pickInitialVariantPovIds();
 
-  // For every option container (#input-option...)
+  // SELECT options: select matching variant value (or first non-empty)
+  $('#product select[name^="option["]').each(function () {
+    var $select = $(this);
+    if (initialPovIds.length) {
+      if (setSelectByPovIds($select, initialPovIds)) return;
+    }
+    var $firstOpt = $select.find('option').filter(function(){ return $(this).val() !== ''; }).first();
+    if ($firstOpt.length) $select.val($firstOpt.val()).trigger('change');
+  });
+
+  // RADIO options: for each radio group name, select matching variant value (or first)
+  var radioNames = {};
+  $('#product input[type="radio"][name^="option["]').each(function () {
+    radioNames[$(this).attr('name')] = true;
+  });
+  for (var rn in radioNames) {
+    if (!Object.prototype.hasOwnProperty.call(radioNames, rn)) continue;
+    var $group = $('#product input[type="radio"][name="' + rn.replace(/"/g, '\\"') + '"]');
+    if (!$group.length) continue;
+    if (initialPovIds.length) {
+      var $m = $group.filter(function(){ return initialPovIds.indexOf(String($(this).val())) !== -1; }).first();
+      if ($m.length) {
+        $group.prop('checked', false);
+        $m.prop('checked', true).trigger('change');
+        // theme visuals
+        var $c = $m.closest('[id^="input-option"]');
+        if ($c.length) {
+          var $wrap = $m.closest('.radio');
+          if ($wrap.length) {
+            $c.find('.radio').not($wrap).removeClass('active').find('span.option-content-box').removeClass('active');
+            $wrap.addClass('active').find('span.option-content-box').addClass('active');
+          }
+        }
+        continue;
+      }
+    }
+    // fallback: first radio in group
+    var $first = $group.first();
+    if ($first.length) {
+      $group.prop('checked', false);
+      $first.prop('checked', true).trigger('change');
+      var $c2 = $first.closest('[id^="input-option"]');
+      if ($c2.length) {
+        var $w2 = $first.closest('.radio');
+        if ($w2.length) {
+          $c2.find('.radio').not($w2).removeClass('active').find('span.option-content-box').removeClass('active');
+          $w2.addClass('active').find('span.option-content-box').addClass('active');
+        }
+      }
+    }
+  }
+
+  // CHECKBOX options: check those in the variant key; if none, check first checkbox in each container
   $('#product [id^="input-option"]').each(function () {
     var $container = $(this);
-
-    // Prefer selecting a real variant combination if we have one
+    var $checks = $container.find('input[type="checkbox"][name^="option["]');
+    if (!$checks.length) return;
+    var any = false;
     if (initialPovIds.length) {
-      var $select = $container.find('select').first();
-      if ($select.length) {
-        if (setSelectByPovIds($select, initialPovIds)) return;
-      }
-      if (setRadioByPovIds($container, initialPovIds)) return;
-      if (setCheckboxesByPovIds($container, initialPovIds)) return;
-      // If this container doesn't participate in the variant key, fall through to defaults
+      $checks.each(function () {
+        var $c = $(this);
+        if (initialPovIds.indexOf(String($c.val())) !== -1) {
+          $c.prop('checked', true).trigger('change');
+          $c.closest('label').find('span.option-content-box').addClass('active');
+          any = true;
+        }
+      });
     }
-
-    // Fallback: 1) SELECTs pick first non-empty
-    var $select2 = $container.find('select').first();
-    if ($select2.length) {
-      var $firstOpt = $select2.find('option').not(':disabled').filter(function(){ return $(this).val() !== ''; }).first();
-      if ($firstOpt.length) {
-        $select2.val($firstOpt.val()).trigger('change');
+    if (!any) {
+      var $firstCb = $checks.first();
+      if ($firstCb.length) {
+        $firstCb.prop('checked', true).trigger('change');
+        $firstCb.closest('label').find('span.option-content-box').addClass('active');
       }
-      return;
-    }
-
-    // Fallback: 2) RADIO groups: check first
-    var $firstRadio = $container.find('input[type="radio"]:not(:disabled)').first();
-    if ($firstRadio.length) {
-      $container.find('input[type="radio"]').prop('checked', false);
-      $firstRadio.prop('checked', true).trigger('change');
-      var $selectedRadioWrap = $firstRadio.closest('.radio');
-      if ($selectedRadioWrap.length) {
-        $container.find('.radio').not($selectedRadioWrap).removeClass('active').find('span.option-content-box').removeClass('active');
-        $selectedRadioWrap.addClass('active').find('span.option-content-box').addClass('active');
-      } else {
-        $container.find('span.option-content-box').removeClass('active');
-        $firstRadio.closest('label').find('span.option-content-box').addClass('active');
-      }
-      return;
-    }
-
-    // Fallback: 3) CHECKBOX groups: check first
-    var $firstCheckbox = $container.find('input[type="checkbox"]:not(:disabled)').first();
-    if ($firstCheckbox.length) {
-      $firstCheckbox.prop('checked', true).trigger('change');
-      var $chkWrap = $firstCheckbox.closest('.checkbox');
-      if ($chkWrap.length) $chkWrap.find('span.option-content-box').addClass('active');
-      else $firstCheckbox.closest('label').find('span.option-content-box').addClass('active');
     }
   });
 
