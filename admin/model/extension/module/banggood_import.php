@@ -464,8 +464,24 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $result['raw'] = $resp;
 
         if (is_array($resp) && isset($resp['code']) && (int)$resp['code'] !== 0) {
+            $code = (int)$resp['code'];
             $msg = isset($resp['msg']) ? $resp['msg'] : (isset($resp['message']) ? $resp['message'] : 'API error');
-            $result['errors'][] = "Banggood API error: code=" . (int)$resp['code'] . " msg=" . $msg;
+            $result['code'] = $code;
+
+            // Banggood getProductList requires sub-categories; root categories return 12022.
+            // Sometimes upstream strips the numeric code from thrown messages, so we also treat known text as skippable.
+            $msgStr = (string)$msg;
+            $looksLike12022 = ($code === 12022)
+                || (stripos($msgStr, 'Cannot query by this cat') !== false)
+                || (stripos($msgStr, 'use the sub-category') !== false)
+                || (stripos($msgStr, 'use the sub category') !== false);
+            if ($looksLike12022) {
+                $result['errors'][] = 'Banggood API error: code=12022 msg=Cannot query by this cat_id (use sub-category)';
+                $result['skippable_cat_id'] = true;
+                return $result;
+            }
+
+            $result['errors'][] = "Banggood API error: code=" . $code . " msg=" . $msgStr;
             return $result;
         }
 
@@ -538,6 +554,17 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             $result['code'] = (int)$m[1];
         } elseif (preg_match('/\\b(\\d{5})\\b/', (string)$msg, $m)) {
             $result['code'] = (int)$m[1];
+        } else {
+            // Some environments only surface the human message (no "code=12022").
+            // Treat the known 12022 wording as skippable.
+            $msgStr = (string)$msg;
+            if (
+                stripos($msgStr, 'Cannot query by this cat') !== false
+                || stripos($msgStr, 'use the sub-category') !== false
+                || stripos($msgStr, 'use the sub category') !== false
+            ) {
+                $result['code'] = 12022;
+            }
         }
         if (!empty($result['code']) && (int)$result['code'] === 12022) {
             $result['errors'][] = 'Banggood API error: code=12022 msg=Cannot query by this cat_id (use sub-category)';
