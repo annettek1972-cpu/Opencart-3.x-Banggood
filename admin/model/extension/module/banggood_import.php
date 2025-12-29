@@ -713,6 +713,24 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             if (!isset($have['imported_at'])) {
                 $this->db->query("ALTER TABLE `" . $tbl . "` ADD COLUMN `imported_at` datetime DEFAULT NULL");
             }
+
+            // Some older installs had status default NULL or empty; make sure new inserts become pending.
+            if (isset($have['status'])) {
+                try {
+                    $statusCol = null;
+                    foreach ($cols as $c) {
+                        if (strcasecmp((string)$c['Field'], 'status') === 0) { $statusCol = $c; break; }
+                    }
+                    if (is_array($statusCol)) {
+                        $def = array_key_exists('Default', $statusCol) ? $statusCol['Default'] : null;
+                        if ($def === null || $def === '') {
+                            $this->db->query("ALTER TABLE `" . $tbl . "` MODIFY COLUMN `status` varchar(32) DEFAULT 'pending'");
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+            }
         } catch (\Throwable $e) {
             // ignore; table may not allow alter in some environments
         }
@@ -787,15 +805,16 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             // Insert or update existing row. Do not change status if existing status = 'imported'
             // ON DUPLICATE KEY UPDATE will overwrite metadata and fetched_at
             $sql = "INSERT INTO `" . $tbl . "`
-                (`bg_product_id`,`cat_id`,`name`,`img`,`meta_desc`,`raw_json`,`fetched_at`)
-                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "')
+                (`bg_product_id`,`cat_id`,`name`,`img`,`meta_desc`,`raw_json`,`fetched_at`,`status`)
+                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "','pending')
                 ON DUPLICATE KEY UPDATE
                   `cat_id` = VALUES(`cat_id`),
                   `name` = VALUES(`name`),
                   `img` = VALUES(`img`),
                   `meta_desc` = VALUES(`meta_desc`),
                   `raw_json` = VALUES(`raw_json`),
-                  `fetched_at` = VALUES(`fetched_at`)";
+                  `fetched_at` = VALUES(`fetched_at`),
+                  `status` = IF(LOWER(TRIM(IFNULL(`status`,''))) IN ('imported','processing'), `status`, VALUES(`status`))";
             $this->db->query($sql);
             $count++;
         }
@@ -815,11 +834,13 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         // - pending
         // - updated where updated_at is NULL (if column exists), otherwise include updated too.
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
-        $where = "`status` = 'pending'";
+        // Some installs store status as NULL/blank/uppercase; treat those as pending.
+        $statusExpr = "LOWER(TRIM(IFNULL(`status`,'')))";
+        $where = "(" . $statusExpr . " = '' OR " . $statusExpr . " = 'pending')";
         if ($updatedCol) {
-            $where .= " OR (`status` = 'updated' AND `" . $updatedCol . "` IS NULL)";
+            $where .= " OR (" . $statusExpr . " = 'updated' AND `" . $updatedCol . "` IS NULL)";
         } else {
-            $where .= " OR `status` = 'updated'";
+            $where .= " OR (" . $statusExpr . " = 'updated')";
         }
 
         $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
@@ -850,11 +871,12 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             $q = $this->db->query("SELECT `status` FROM `" . $tbl . "` WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "' LIMIT 1");
             if ($q && $q->num_rows) $cur = isset($q->row['status']) ? (string)$q->row['status'] : null;
         } catch (\Throwable $e) {}
+        $curNorm = strtolower(trim((string)$cur));
 
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
         $importedCol = $this->getFetchedProductsImportedAtColumnName();
 
-        if ($cur === 'updated') {
+        if ($curNorm === 'updated') {
             $set = array("`status` = 'updated'", "`last_error` = NULL");
             if ($updatedCol) $set[] = "`" . $updatedCol . "` = '" . $this->db->escape($now) . "'";
             $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
