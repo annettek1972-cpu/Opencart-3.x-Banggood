@@ -692,6 +692,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             `fetched_at` datetime DEFAULT NULL,
             `status` varchar(32) DEFAULT 'pending',
             `last_error` text DEFAULT NULL,
+            `processing_at` datetime DEFAULT NULL,
             `imported_at` datetime DEFAULT NULL,
             `updated_at` datetime DEFAULT NULL,
             `attempts` int(11) DEFAULT 0,
@@ -712,6 +713,9 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             }
             if (!isset($have['imported_at'])) {
                 $this->db->query("ALTER TABLE `" . $tbl . "` ADD COLUMN `imported_at` datetime DEFAULT NULL");
+            }
+            if (!isset($have['processing_at'])) {
+                $this->db->query("ALTER TABLE `" . $tbl . "` ADD COLUMN `processing_at` datetime DEFAULT NULL");
             }
 
             // Some older installs had status default NULL or empty; make sure new inserts become pending.
@@ -830,6 +834,23 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
 
+        // Re-queue rows stuck in "processing" (e.g. fatal error during import).
+        // This prevents the queue from freezing permanently.
+        try {
+            $this->db->query(
+                "UPDATE `" . $tbl . "`
+                 SET `status` = 'pending', `processing_at` = NULL
+                 WHERE LOWER(TRIM(IFNULL(`status`,''))) = 'processing'
+                   AND (
+                     `processing_at` IS NULL
+                     OR `processing_at` < DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+                   )
+                   AND `attempts` < 10"
+            );
+        } catch (\Throwable $e) {
+            // ignore; best-effort
+        }
+
         // Select rows needing processing:
         // - pending
         // - updated where updated_at is NULL (if column exists), otherwise include updated too.
@@ -850,7 +871,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             $ids = array();
             foreach ($rows as $r) $ids[] = (int)$r['id'];
             // Mark selected rows as processing and increment attempts
-            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `processing_at` = NOW(), `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
         }
 
         return $rows;
@@ -877,11 +898,11 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $importedCol = $this->getFetchedProductsImportedAtColumnName();
 
         if ($curNorm === 'updated') {
-            $set = array("`status` = 'updated'", "`last_error` = NULL");
+            $set = array("`status` = 'updated'", "`last_error` = NULL", "`processing_at` = NULL");
             if ($updatedCol) $set[] = "`" . $updatedCol . "` = '" . $this->db->escape($now) . "'";
             $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
         } else {
-            $set = array("`status` = 'imported'", "`last_error` = NULL");
+            $set = array("`status` = 'imported'", "`last_error` = NULL", "`processing_at` = NULL");
             if ($importedCol) $set[] = "`" . $importedCol . "` = '" . $this->db->escape($now) . "'";
             $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
         }
@@ -894,7 +915,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         if (empty($bg_product_id)) return;
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
-        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `last_error` = '" . $this->db->escape((string)$message) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
+        $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'error', `processing_at` = NULL, `last_error` = '" . $this->db->escape((string)$message) . "' WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
     }
 
     /**

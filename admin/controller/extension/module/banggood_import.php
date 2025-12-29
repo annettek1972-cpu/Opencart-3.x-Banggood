@@ -1338,7 +1338,7 @@ HTML;
             else $selectExtra .= ", NULL AS updated_at";
 
             $qr = $this->db->query(
-                "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
+                "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`, `last_error`, `processing_at`" . $selectExtra . "
                  FROM `" . $tbl . "`
                  ORDER BY `fetched_at` DESC, `id` DESC
                  LIMIT " . (int)$offset . "," . (int)$limit
@@ -1367,6 +1367,8 @@ HTML;
                     $attempts = isset($row['attempts']) ? (int)$row['attempts'] : 0;
                     $imported_at = isset($row['imported_at']) && $row['imported_at'] ? (string)$row['imported_at'] : null;
                     $updated_at = isset($row['updated_at']) && $row['updated_at'] ? (string)$row['updated_at'] : null;
+                    $last_error = isset($row['last_error']) ? (string)$row['last_error'] : '';
+                    $processing_at = isset($row['processing_at']) && $row['processing_at'] ? (string)$row['processing_at'] : null;
 
                     // Real colors requested
                     $color_green = '#28a745';
@@ -1397,9 +1399,13 @@ HTML;
 
                     $metaLine = array();
                     $metaLine[] = 'Attempts: ' . (int)$attempts;
+                    if ($status === 'processing' && $processing_at) $metaLine[] = 'Processing: ' . htmlspecialchars(date('Y-m-d H:i', strtotime($processing_at)), ENT_QUOTES, 'UTF-8');
                     if ($importedCol) $metaLine[] = 'Imported: ' . ($imported_at ? htmlspecialchars(date('Y-m-d H:i', strtotime($imported_at)), ENT_QUOTES, 'UTF-8') : 'null');
                     if ($updatedCol) $metaLine[] = 'Updated: ' . ($updated_at ? htmlspecialchars(date('Y-m-d H:i', strtotime($updated_at)), ENT_QUOTES, 'UTF-8') : 'null');
                     $html .= '<div style="color:#999;font-size:12px;white-space:nowrap;">' . implode(' • ', $metaLine) . '</div>';
+                    if ($status === 'error' && $last_error !== '') {
+                        $html .= '<div style="color:#b00;font-size:12px;white-space:normal;overflow:hidden;text-overflow:ellipsis;">' . htmlspecialchars($last_error, ENT_QUOTES, 'UTF-8') . '</div>';
+                    }
                     if ($meta !== '') {
                         $html .= '<div style="color:#999;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' . htmlspecialchars($meta, ENT_QUOTES, 'UTF-8') . '</div>';
                     }
