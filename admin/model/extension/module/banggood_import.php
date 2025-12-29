@@ -2733,16 +2733,19 @@ protected function apiRequestRawSimple($url) {
     try { $this->applyStocksToProduct($normalized['bg_id'], (int)$product_id, $this->getBanggoodConfig()); } catch (Exception $e) { error_log('applyStocksToProduct error (create): ' . $e->getMessage()); }
     try { $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id); } catch (Exception $e) { error_log('syncShipFromStatusesForProduct error (create): ' . $e->getMessage()); }
 
-    // Generate image cache for product images
-    try {
-        $imgs = array();
-        if ($main_image) $imgs[] = $main_image;
-        if (!empty($product_image)) {
-            foreach ($product_image as $pi) if (is_array($pi) && isset($pi['image'])) $imgs[] = $pi['image'];
+    // Generate image cache for product images (optional)
+    // Some servers crash fatally in GD WebP generation; keep imports reliable by default.
+    if ((bool)$this->config->get('module_banggood_import_warm_image_cache')) {
+        try {
+            $imgs = array();
+            if ($main_image) $imgs[] = $main_image;
+            if (!empty($product_image)) {
+                foreach ($product_image as $pi) if (is_array($pi) && isset($pi['image'])) $imgs[] = $pi['image'];
+            }
+            $this->generateImageCacheForImages($imgs);
+        } catch (Exception $e) {
+            error_log('generateImageCacheForImages error (create): ' . $e->getMessage());
         }
-        $this->generateImageCacheForImages($imgs);
-    } catch (Exception $e) {
-        error_log('generateImageCacheForImages error (create): ' . $e->getMessage());
     }
 
     return $product_id;
@@ -2863,14 +2866,16 @@ protected function apiRequestRawSimple($url) {
         $this->db->query("INSERT INTO `" . DB_PREFIX . "product_image` SET product_id = " . (int)$product_id . ", image = '" . $this->db->escape($img_rel) . "', sort_order = 0");
     }
 
-    // Regenerate image cache for any newly added images (non-destructive)
-    try {
-        $imgs = array();
-        if ($main_image) $imgs[] = $main_image;
-        foreach ($gallery_images as $gi) if (is_string($gi)) $imgs[] = $this->toRelativeImagePath($gi);
-        $this->generateImageCacheForImages($imgs);
-    } catch (Exception $e) {
-        error_log('generateImageCacheForImages error (update): ' . $e->getMessage());
+    // Regenerate image cache for any newly added images (optional, non-destructive)
+    if ((bool)$this->config->get('module_banggood_import_warm_image_cache')) {
+        try {
+            $imgs = array();
+            if ($main_image) $imgs[] = $main_image;
+            foreach ($gallery_images as $gi) if (is_string($gi)) $imgs[] = $this->toRelativeImagePath($gi);
+            $this->generateImageCacheForImages($imgs);
+        } catch (Exception $e) {
+            error_log('generateImageCacheForImages error (update): ' . $e->getMessage());
+        }
     }
 
     // NEW: Refresh stocks & ship-from statuses for this product based on Banggood data.
