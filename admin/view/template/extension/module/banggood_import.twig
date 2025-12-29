@@ -125,6 +125,9 @@
                 </div>
               </div>
 
+              {# Sticky alerts: never overwritten by live queue refresh #}
+              <div id="bg-sticky-alerts" aria-live="polite" style="margin-top:10px;"></div>
+
               <div id="banggood-products" aria-live="polite" style="margin-top:12px;">
                 {% if bg_fetched_products_html %}
                   {{ bg_fetched_products_html|raw }}
@@ -909,6 +912,7 @@ $('#btn-fetch-chunk').on('click', function(e){
   e.preventDefault();
   var $btn = $(this);
   var $panel = $('#banggood-products');
+  var $alerts = $('#bg-sticky-alerts');
   bgProductsMode = 'persisted';
   var count = parseInt($('#bg-fetch-count').val(), 10);
   if (!count || count < 1) count = 10;
@@ -926,7 +930,7 @@ $('#btn-fetch-chunk').on('click', function(e){
     },
     success: function(json) {
       if (json.error) {
-        $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
+        $alerts.html('<div class="alert alert-danger">Fetch error: ' + json.error + '</div>');
         return;
       }
       if (json.finished) {
@@ -972,7 +976,7 @@ $('#btn-fetch-chunk').on('click', function(e){
                     '</div>';
                 }
               } catch(e) { dbgHtml = ''; }
-              $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + dbgHtml + '</div>');
+              $alerts.html('<div class="alert alert-danger">Import error: ' + pjson.error + dbgHtml + '</div>');
               return;
             }
             // Force an immediate refresh so status flips from pending -> imported.
@@ -1000,7 +1004,7 @@ $('#btn-fetch-chunk').on('click', function(e){
             // Show why it didn't run (403/504/etc.)
             var msg = 'Import AJAX error: ' + (err || status);
             try { if (xhr && xhr.status) msg += ' (HTTP ' + xhr.status + ')'; } catch(e) {}
-            $panel.prepend('<div class="alert alert-danger">' + msg + '</div>');
+            $alerts.html('<div class="alert alert-danger">' + msg + '</div>');
           },
           complete: function() {
             $btn.prop('disabled', false);
@@ -1010,7 +1014,7 @@ $('#btn-fetch-chunk').on('click', function(e){
       }
     },
     error: function(xhr, status, err) {
-      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      $alerts.html('<div class="alert alert-danger">AJAX error: ' + err + '</div>');
     },
     complete: function() {
       $btn.prop('disabled', false);
