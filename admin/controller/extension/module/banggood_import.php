@@ -1945,7 +1945,16 @@ HTML;
                     $idCol = null;
                     foreach ($idCandidates as $c) if (in_array($c, $available)) { $idCol = $c; break; }
                     if (!$idCol) return array();
-                    $qr = $this->db->query("SELECT `" . $this->db->escape($idCol) . "` AS cat_id FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`");
+                    // Parent is needed so we can filter to leaf categories (Banggood requires sub-categories; root categories return code=12022).
+                    $parentCandidates = ['parent_id','parent_cat_id','parent','parentId'];
+                    $parentCol = null;
+                    foreach ($parentCandidates as $pc) if (in_array($pc, $available)) { $parentCol = $pc; break; }
+
+                    $select = "SELECT `" . $this->db->escape($idCol) . "` AS cat_id";
+                    if ($parentCol) $select .= ", `" . $this->db->escape($parentCol) . "` AS parent_id";
+                    else $select .= ", '' AS parent_id";
+                    $select .= " FROM `" . $this->db->escape($fullTable) . "` ORDER BY `" . $this->db->escape($idCol) . "`";
+                    $qr = $this->db->query($select);
                     return $qr->rows;
                 } catch (\Throwable $e) {
                     return array();
@@ -1960,7 +1969,29 @@ HTML;
                 return;
             }
 
+            // Banggood getProductList requires sub-categories: root categories return code=12022.
+            // Filter to leaf categories when we have parent_id information.
+            $hasParentInfo = false;
+            foreach ($rows as $r) { if (isset($r['parent_id'])) { $hasParentInfo = true; break; } }
+            if ($hasParentInfo) {
+                $parents = array();
+                foreach ($rows as $r) {
+                    $p = isset($r['parent_id']) ? (string)$r['parent_id'] : '';
+                    if ($p !== '' && $p !== '0') $parents[$p] = true;
+                }
+                $leaf = array();
+                foreach ($rows as $r) {
+                    $id = isset($r['cat_id']) ? (string)$r['cat_id'] : '';
+                    if ($id === '') continue;
+                    if (!isset($parents[$id])) $leaf[] = $r;
+                }
+                if (!empty($leaf)) {
+                    $rows = $leaf;
+                }
+            }
+
             $total_categories = count($rows);
+            if ($category_index >= $total_categories) $category_index = 0;
             $collected = array();
             $next_category_index = $category_index;
             $next_page = $page;

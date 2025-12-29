@@ -256,7 +256,18 @@ function bg_fetch_category_rows(DB $db, string $shortTable): array {
         }
         if (!$idCol) return [];
 
-        $qr = $db->query("SELECT `" . $db->escape($idCol) . "` AS cat_id FROM `" . $db->escape($fullTable) . "` ORDER BY `" . $db->escape($idCol) . "`");
+        // Parent is needed so we can filter to leaf categories (Banggood requires sub-categories; root categories return code=12022).
+        $parentCandidates = ['parent_id','parent_cat_id','parent','parentId'];
+        $parentCol = null;
+        foreach ($parentCandidates as $pc) {
+            if (in_array($pc, $available, true)) { $parentCol = $pc; break; }
+        }
+
+        $select = "SELECT `" . $db->escape($idCol) . "` AS cat_id";
+        if ($parentCol) $select .= ", `" . $db->escape($parentCol) . "` AS parent_id";
+        else $select .= ", '' AS parent_id";
+        $select .= " FROM `" . $db->escape($fullTable) . "` ORDER BY `" . $db->escape($idCol) . "`";
+        $qr = $db->query($select);
         return $qr->rows;
     } catch (Throwable $e) {
         return [];
@@ -311,6 +322,25 @@ try {
     if (!$rows) {
         fwrite(STDERR, "No Banggood categories available to iterate (bg_category / bg_category_import empty).\n");
         exit(2);
+    }
+
+    // Banggood getProductList requires sub-categories: root categories return code=12022.
+    // Filter to leaf categories when we have parent_id information.
+    $hasParentInfo = false;
+    foreach ($rows as $r) { if (isset($r['parent_id'])) { $hasParentInfo = true; break; } }
+    if ($hasParentInfo) {
+        $parents = [];
+        foreach ($rows as $r) {
+            $p = isset($r['parent_id']) ? (string)$r['parent_id'] : '';
+            if ($p !== '' && $p !== '0') $parents[$p] = true;
+        }
+        $leaf = [];
+        foreach ($rows as $r) {
+            $id = isset($r['cat_id']) ? (string)$r['cat_id'] : '';
+            if ($id === '') continue;
+            if (!isset($parents[$id])) $leaf[] = $r;
+        }
+        if (!empty($leaf)) $rows = $leaf;
     }
 
     $total_categories = count($rows);
