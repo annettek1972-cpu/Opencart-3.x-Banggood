@@ -1343,9 +1343,23 @@ $(document).ready(function(){
   window.BG_OPTION_INIT_LOADED = true;
 
   var userTouched = false;
-  $(document).on('pointerdown mousedown keydown touchstart', '#product select[name^="option["], #product input[name^="option["]', function (e) {
+  function markTouched(e) {
+    // Only treat real user actions as "touched"
     try { if (e && e.isTrusted === false) return; } catch (x) {}
     userTouched = true;
+  }
+  // Themes often use custom clickable spans; watch the whole #product block.
+  $(document).on('pointerdown mousedown touchstart keydown', '#product', function (e) {
+    var t = e && e.target ? e.target : null;
+    if (!t) return;
+    // Native controls or their wrappers
+    if ($(t).closest('select[name^="option["], input[name^="option["], .option-content-box, label').length) {
+      markTouched(e);
+    }
+  });
+  // Also stop auto-init once user makes a real change selection.
+  $(document).on('change', '#product select[name^="option["], #product input[name^="option["]', function (e) {
+    markTouched(e);
   });
 
   function initOnce() {
