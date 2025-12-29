@@ -3785,8 +3785,11 @@ protected function apiRequestRawSimple($url) {
 
         if ($image_path) {
             $this->db->query("UPDATE `" . DB_PREFIX . "option_value` SET `image` = '" . $this->db->escape($image_path) . "' WHERE `option_value_id` = '" . (int)$option_value_id . "'");
-            // Warm OpenCart image cache so front-end uses /image/cache/ immediately
-            try { $this->generateImageCacheForImages(array($image_path)); } catch (Exception $e) {}
+            // Warm OpenCart image cache so front-end uses /image/cache/ immediately (optional).
+            // Some servers crash fatally in GD WebP generation; keep imports reliable by default.
+            if ((bool)$this->config->get('module_banggood_import_warm_image_cache')) {
+                try { $this->generateImageCacheForImages(array($image_path)); } catch (Exception $e) {}
+            }
         }
 
         $this->load->model('localisation/language');
@@ -3809,8 +3812,10 @@ protected function apiRequestRawSimple($url) {
         $image_path = $this->toRelativeImagePath($image_path);
         if ($image_path) {
             $this->db->query("UPDATE `" . DB_PREFIX . "option_value` SET `image` = '" . $this->db->escape($image_path) . "' WHERE `option_value_id` = '" . (int)$option_value_id . "'");
-            // Warm OpenCart image cache so front-end uses /image/cache/ immediately
-            try { $this->generateImageCacheForImages(array($image_path)); } catch (Exception $e) {}
+            // Warm OpenCart image cache so front-end uses /image/cache/ immediately (optional).
+            if ((bool)$this->config->get('module_banggood_import_warm_image_cache')) {
+                try { $this->generateImageCacheForImages(array($image_path)); } catch (Exception $e) {}
+            }
             return true;
         }
         return false;
