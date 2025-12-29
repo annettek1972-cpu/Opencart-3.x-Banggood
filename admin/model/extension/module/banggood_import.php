@@ -2086,6 +2086,17 @@ protected function apiRequestRawSimple($url) {
        Debug logger (tries multiple locations then error_log)
        ------------------------- */
     protected function writeDebugLog($bg_id, array $diagnostics) {
+        // Prevent filling server logs/disk by default.
+        // Enable debug file + log output only when explicitly turned on in settings.
+        // (Add setting key module_banggood_import_debug_log=1 if you ever need it.)
+        try {
+            if (!(bool)$this->config->get('module_banggood_import_debug_log')) {
+                return;
+            }
+        } catch (\Throwable $e) {
+            return;
+        }
+
         $filename = 'banggood_import_debug_' . preg_replace('/[^0-9A-Za-z_.-]/', '_', $bg_id) . '.log';
         $entry = array('ts' => date('c'), 'diagnostics' => $diagnostics);
         $json = json_encode($entry, JSON_PRETTY_PRINT) . PHP_EOL;
@@ -2714,7 +2725,15 @@ protected function apiRequestRawSimple($url) {
             try { $this->applyPoaQuantitiesToProduct((int)$product_id, $poa_list, $normalized['bg_id']); } catch (Exception $e) { error_log('applyPoaQuantitiesToProduct error (create): ' . $e->getMessage()); }
         }
         if (!empty($normalized['raw']['warehouse_list']) && is_array($normalized['raw']['warehouse_list'])) {
-            try { $this->mapAndAttachBanggoodWarehouses($normalized['raw']['warehouse_list'], $normalized['bg_id'], isset($normalized['price']) ? $normalized['price'] : null, (int)$product_id); } catch (Exception $e) { error_log('mapAndAttachBanggoodWarehouses error (create): ' . $e->getMessage()); }
+            try {
+                $this->mapAndAttachBanggoodWarehouses($normalized['raw']['warehouse_list'], $normalized['bg_id'], isset($normalized['price']) ? $normalized['price'] : null, (int)$product_id);
+            } catch (Exception $e) {
+                // Avoid filling server logs with repeated "Unknown column banggood_status" noise.
+                $msg = (string)$e->getMessage();
+                if (stripos($msg, "Unknown column 'banggood_status'") === false && stripos($msg, 'Unknown column `banggood_status`') === false) {
+                    error_log('mapAndAttachBanggoodWarehouses error (create): ' . $msg);
+                }
+            }
             try {
                 $preferred_wh = $this->config->get('module_banggood_import_preferred_warehouse');
                 $this->applyWarehousePricingToProduct((int)$product_id, $normalized['bg_id'], $preferred_wh ?: null);
@@ -2731,7 +2750,15 @@ protected function apiRequestRawSimple($url) {
 
     // Apply stocks and ship-from statuses
     try { $this->applyStocksToProduct($normalized['bg_id'], (int)$product_id, $this->getBanggoodConfig()); } catch (Exception $e) { error_log('applyStocksToProduct error (create): ' . $e->getMessage()); }
-    try { $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id); } catch (Exception $e) { error_log('syncShipFromStatusesForProduct error (create): ' . $e->getMessage()); }
+    try {
+        $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id);
+    } catch (Exception $e) {
+        // Avoid filling server logs with repeated "Unknown column banggood_status" noise.
+        $msg = (string)$e->getMessage();
+        if (stripos($msg, "Unknown column 'banggood_status'") === false && stripos($msg, 'Unknown column `banggood_status`') === false) {
+            error_log('syncShipFromStatusesForProduct error (create): ' . $msg);
+        }
+    }
 
     // Generate image cache for product images
     try {
@@ -2922,7 +2949,11 @@ protected function apiRequestRawSimple($url) {
             $this->syncShipFromStatusesForProduct($normalized['bg_id'], (int)$product_id);
         }
     } catch (Exception $e) {
-        error_log('syncShipFromStatusesForProduct error (update): ' . $e->getMessage());
+        // Avoid filling server logs with repeated "Unknown column banggood_status" noise.
+        $msg = (string)$e->getMessage();
+        if (stripos($msg, "Unknown column 'banggood_status'") === false && stripos($msg, 'Unknown column `banggood_status`') === false) {
+            error_log('syncShipFromStatusesForProduct error (update): ' . $msg);
+        }
     }
 
     // BEST-EFFORT: ensure product_variant rows exist after update as well
