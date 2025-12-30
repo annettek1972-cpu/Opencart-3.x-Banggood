@@ -974,12 +974,6 @@ $('#btn-fetch-chunk').on('click', function(e){
         }
 
         // No backlog pending to process.
-        // If user selected "Fetch 1", ONLY process queue and stop (do not fetch new IDs).
-        if (count === 1) {
-          finish();
-          return;
-        }
-
         // Backlog empty -> now fetch next chunk
         $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
         $.ajax({
@@ -1191,6 +1185,41 @@ $(document).ready(function() {
   var bgQueueRefreshInFlight = false;
   var lastQueueHtml = null;
 
+  // Derive Cron counts from the live queue list (no backend dependency).
+  function updateCronBannerFromDom() {
+    var $root = $('#banggood-products');
+    var $badges = $root.find('.bg-compact-row span[style*="border-radius:10px"]');
+    var counts = { pending: 0, processing: 0, imported: 0, error: 0, updated: 0 };
+
+    $badges.each(function() {
+      var t = ($(this).text() || '').trim().toUpperCase();
+      if (t === 'PENDING') counts.pending++;
+      else if (t === 'PROCESSING') counts.processing++;
+      else if (t === 'IMPORTED') counts.imported++;
+      else if (t === 'UPDATED') counts.updated++;
+      else if (t === 'ERROR') counts.error++;
+    });
+
+    // For the 4-field banner, treat UPDATED as imported/done.
+    var importedTotal = counts.imported + counts.updated;
+
+    var $banner = $('#bg-cron-status');
+    if (!$banner.length) return;
+
+    var hasError = counts.error > 0;
+    $banner.css({
+      'background': hasError ? '#d9534f' : '#5cb85c',
+      'color': '#fff'
+    });
+    $banner.html(
+      '<strong>Cron</strong> — ' +
+      'Pending: ' + counts.pending + ', ' +
+      'Processing: ' + counts.processing + ', ' +
+      'Imported: ' + importedTotal + ', ' +
+      'Errors: ' + counts.error
+    );
+  }
+
   function syncQueuePagerUi(page, pageTotal) {
     page = parseInt(page, 10); if (!page || page < 1) page = 1;
     pageTotal = parseInt(pageTotal, 10); if (!pageTotal || pageTotal < 1) pageTotal = 1;
@@ -1228,6 +1257,8 @@ $(document).ready(function() {
             $('#banggood-products').html(json.html);
           }
         }
+        // Always recompute banner counts from current DOM (even if HTML unchanged).
+        updateCronBannerFromDom();
       },
       complete: function() {
         bgQueueRefreshInFlight = false;
@@ -1264,5 +1295,7 @@ $(document).ready(function() {
   bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
   // Also do a single refresh shortly after page load.
   setTimeout(refreshPersistedQueueOnce, 800);
+  // Also compute banner once from initial HTML (if present).
+  setTimeout(updateCronBannerFromDom, 200);
 });
 </script>
