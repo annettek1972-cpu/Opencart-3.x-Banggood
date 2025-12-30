@@ -2279,8 +2279,10 @@ HTML;
                 $msg = isset($err['message']) ? (string)$err['message'] : 'Fatal error';
                 $file = isset($err['file']) ? (string)$err['file'] : '';
                 $line = isset($err['line']) ? (int)$err['line'] : 0;
+                $loc = ($file !== '' ? ($file . ($line ? ':' . $line : '')) : '');
+                $full = 'processFetchedProducts fatal' . ($loc !== '' ? (' at ' . $loc) : '') . ': ' . $msg;
                 echo json_encode(array(
-                    'error' => 'processFetchedProducts fatal: ' . $msg,
+                    'error' => $full,
                     'fatal_file' => $file,
                     'fatal_line' => $line
                 ));
