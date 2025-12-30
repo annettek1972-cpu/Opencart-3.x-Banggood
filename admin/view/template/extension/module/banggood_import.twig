@@ -1185,39 +1185,33 @@ $(document).ready(function() {
   var bgQueueRefreshInFlight = false;
   var lastQueueHtml = null;
 
-  // Derive Cron counts from the live queue list (no backend dependency).
-  function updateCronBannerFromDom() {
-    var $root = $('#banggood-products');
-    var $badges = $root.find('.bg-compact-row span[style*="border-radius:10px"]');
-    var counts = { pending: 0, processing: 0, imported: 0, error: 0, updated: 0 };
-
-    $badges.each(function() {
-      var t = ($(this).text() || '').trim().toUpperCase();
-      if (t === 'PENDING') counts.pending++;
-      else if (t === 'PROCESSING') counts.processing++;
-      else if (t === 'IMPORTED') counts.imported++;
-      else if (t === 'UPDATED') counts.updated++;
-      else if (t === 'ERROR') counts.error++;
-    });
-
-    // For the 4-field banner, treat UPDATED as imported/done.
-    var importedTotal = counts.imported + counts.updated;
+  function updateCronBannerExact(pending, processing, imported, errors) {
+    pending = parseInt(pending, 10) || 0;
+    processing = parseInt(processing, 10) || 0;
+    imported = parseInt(imported, 10) || 0;
+    errors = parseInt(errors, 10) || 0;
 
     var $banner = $('#bg-cron-status');
     if (!$banner.length) return;
 
-    var hasError = counts.error > 0;
+    var hasError = errors > 0;
     $banner.css({
       'background': hasError ? '#d9534f' : '#5cb85c',
       'color': '#fff'
     });
     $banner.html(
       '<strong>Cron</strong> — ' +
-      'Pending: ' + counts.pending + ', ' +
-      'Processing: ' + counts.processing + ', ' +
-      'Imported: ' + importedTotal + ', ' +
-      'Errors: ' + counts.error
+      'Pending: ' + pending + ', ' +
+      'Processing: ' + processing + ', ' +
+      'Imported: ' + imported + ', ' +
+      'Errors: ' + errors
     );
+  }
+
+  // Use server-provided global counts (exact across oc_bg_fetched_products).
+  function updateCronBannerFromJson(json) {
+    if (!json || typeof json.queue_pending === 'undefined') return;
+    updateCronBannerExact(json.queue_pending, json.queue_processing, json.queue_imported, json.queue_error);
   }
 
   function syncQueuePagerUi(page, pageTotal) {
@@ -1257,8 +1251,8 @@ $(document).ready(function() {
             $('#banggood-products').html(json.html);
           }
         }
-        // Always recompute banner counts from current DOM (even if HTML unchanged).
-        updateCronBannerFromDom();
+        // Always update banner from server-provided global counts (even if HTML unchanged).
+        updateCronBannerFromJson(json);
       },
       complete: function() {
         bgQueueRefreshInFlight = false;
@@ -1295,7 +1289,5 @@ $(document).ready(function() {
   bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
   // Also do a single refresh shortly after page load.
   setTimeout(refreshPersistedQueueOnce, 800);
-  // Also compute banner once from initial HTML (if present).
-  setTimeout(updateCronBannerFromDom, 200);
 });
 </script>

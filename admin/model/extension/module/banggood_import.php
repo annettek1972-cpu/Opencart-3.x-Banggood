@@ -867,11 +867,13 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
     public function getFetchedProductsStats() {
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
+        // Treat UPDATED as imported/done for banner purposes.
         $row = $this->db->query("SELECT 
-            SUM(`status` = 'pending') AS pending,
-            SUM(`status` = 'processing') AS processing,
-            SUM(`status` = 'imported') AS imported,
-            SUM(`status` = 'error') AS error,
+            SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+            SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
+            SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error,
             COUNT(*) AS total
             FROM `" . $tbl . "`")->row;
 
@@ -880,6 +882,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             'pending' => isset($row['pending']) ? (int)$row['pending'] : 0,
             'processing' => isset($row['processing']) ? (int)$row['processing'] : 0,
             'imported' => isset($row['imported']) ? (int)$row['imported'] : 0,
+            'updated' => isset($row['updated']) ? (int)$row['updated'] : 0,
             'error' => isset($row['error']) ? (int)$row['error'] : 0,
             'total' => isset($row['total']) ? (int)$row['total'] : 0
         );

@@ -1350,6 +1350,25 @@ HTML;
                 return;
             }
 
+            // Always return global queue counts (across the entire table), not just the current page.
+            // Treat UPDATED as imported/done for the "Imported" banner number.
+            try {
+                $st = $this->db->query("SELECT
+                    SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                    FROM `" . $tbl . "`")->row;
+                $json['queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
+                $json['queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
+                $json['queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
+                $json['queue_updated'] = isset($st['updated']) ? (int)$st['updated'] : 0;
+                $json['queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+            } catch (\Throwable $e) {
+                // Non-fatal; banner can fall back to existing values.
+            }
+
             $qc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "`");
             $total_count = isset($qc->row['cnt']) ? (int)$qc->row['cnt'] : 0;
             $page_total = $limit > 0 ? (int)ceil($total_count / $limit) : 0;
