@@ -449,9 +449,17 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_queue_processing'] = 0;
         $data['bg_queue_imported'] = 0;
         $data['bg_queue_error'] = 0;
+        // IMPORTANT: compute directly from DB (proxy-safe; exact across oc_bg_fetched_products).
         try {
-            if (isset($this->model_extension_module_banggood_import) && method_exists($this->model_extension_module_banggood_import, 'getFetchedProductsStats')) {
-                $st = $this->model_extension_module_banggood_import->getFetchedProductsStats();
+            $tbl = $this->getFetchedProductsTableName();
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+            if ($q && $q->num_rows) {
+                $st = $this->db->query("SELECT
+                    SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                    FROM `" . $tbl . "`")->row;
                 if (is_array($st)) {
                     $data['bg_queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
                     $data['bg_queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
@@ -459,9 +467,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
                     $data['bg_queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
                 }
             }
-        } catch (\Throwable $e) {
-            // ignore; banner will show zeros
-        }
+        } catch (\Throwable $e) {}
 
         // Expose update URL for JS (clean URL generation)
         $data['update_categories_url'] = $this->url->link(
@@ -1352,6 +1358,11 @@ HTML;
 
             // Always return global queue counts (across the entire table), not just the current page.
             // Treat UPDATED as imported/done for the "Imported" banner number.
+            $json['queue_pending'] = 0;
+            $json['queue_processing'] = 0;
+            $json['queue_imported'] = 0;
+            $json['queue_updated'] = 0;
+            $json['queue_error'] = 0;
             try {
                 $st = $this->db->query("SELECT
                     SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
