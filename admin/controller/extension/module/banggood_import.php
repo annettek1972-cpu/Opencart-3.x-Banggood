@@ -2280,7 +2280,7 @@ HTML;
                 $file = isset($err['file']) ? (string)$err['file'] : '';
                 $line = isset($err['line']) ? (int)$err['line'] : 0;
                 $loc = ($file !== '' ? ($file . ($line ? ':' . $line : '')) : '');
-                $full = 'processFetchedProducts fatal' . ($loc !== '' ? (' at ' . $loc) : '') . ': ' . $msg;
+                $full = 'DBG2 processFetchedProducts fatal' . ($loc !== '' ? (' at ' . $loc) : '') . ': ' . $msg;
                 echo json_encode(array(
                     'error' => $full,
                     'fatal_file' => $file,
