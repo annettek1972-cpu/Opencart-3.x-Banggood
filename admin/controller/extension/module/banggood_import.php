@@ -2277,7 +2277,13 @@ HTML;
                     http_response_code(500);
                 }
                 $msg = isset($err['message']) ? (string)$err['message'] : 'Fatal error';
-                echo json_encode(array('error' => 'processFetchedProducts fatal: ' . $msg));
+                $file = isset($err['file']) ? (string)$err['file'] : '';
+                $line = isset($err['line']) ? (int)$err['line'] : 0;
+                echo json_encode(array(
+                    'error' => 'processFetchedProducts fatal: ' . $msg,
+                    'fatal_file' => $file,
+                    'fatal_line' => $line
+                ));
             });
         } catch (\Throwable $e) {}
 

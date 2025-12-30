@@ -1069,7 +1069,11 @@ $('#btn-fetch-chunk').on('click', function(e){
         data: { limit: 1 },
         success: function(pjson) {
           if (pjson && pjson.error) {
-            $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
+            var extra = '';
+            try {
+              if (pjson.fatal_file) extra += '<div style="margin-top:6px;font-size:12px;white-space:pre-wrap;">File: ' + $('<div/>').text(pjson.fatal_file).html() + ':' + (pjson.fatal_line || '') + '</div>';
+            } catch(e) {}
+            $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + extra + '</div>');
             return;
           }
           // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
