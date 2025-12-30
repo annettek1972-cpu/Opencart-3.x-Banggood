@@ -4159,18 +4159,9 @@ protected function apiRequestRawSimple($url) {
        Returns true if JPEG written, false otherwise
        ------------------------- */
     protected function writeJpegFromData($data, $local_path) {
-        $im = @imagecreatefromstring($data);
-        if ($im !== false) {
-            $dir = dirname($local_path);
-            if (!is_dir($dir)) @mkdir($dir, 0777, true);
-            $ok = @imagejpeg($im, $local_path, 90);
-            @imagedestroy($im);
-            if ($ok) {
-                @chmod($local_path, 0644);
-                if (@getimagesize($local_path)) return true;
-            }
-        }
-
+        // IMPORTANT:
+        // Some servers fatal inside GD's WebP decoder/encoder ("gd-webp cannot allocate temporary buffer")
+        // when calling imagecreatefromstring() on WebP bytes. Prefer Imagick first to avoid invoking GD WebP.
         if (class_exists('Imagick')) {
             try {
                 $imw = new Imagick();
@@ -4190,6 +4181,19 @@ protected function apiRequestRawSimple($url) {
                 if (@getimagesize($local_path)) return true;
             } catch (Exception $e) {
                 error_log('Banggood: Imagick conversion failed: ' . $e->getMessage());
+            }
+        }
+
+        // Fallback to GD only if Imagick not available / failed.
+        $im = @imagecreatefromstring($data);
+        if ($im !== false) {
+            $dir = dirname($local_path);
+            if (!is_dir($dir)) @mkdir($dir, 0777, true);
+            $ok = @imagejpeg($im, $local_path, 90);
+            @imagedestroy($im);
+            if ($ok) {
+                @chmod($local_path, 0644);
+                if (@getimagesize($local_path)) return true;
             }
         }
 
