@@ -46,6 +46,12 @@ $resetCursor = ($resetCursor === '1' || strtolower((string)$resetCursor) === 'tr
 $verbose = bg_arg($argv, 'verbose', '0');
 $verbose = ($verbose === '1' || strtolower((string)$verbose) === 'true');
 
+// Log raw products returned by the API (per product)
+$logProducts = bg_arg($argv, 'log-products', '0');
+$logProducts = ($logProducts === '1' || strtolower((string)$logProducts) === 'true');
+$logFileArg = (string)bg_arg($argv, 'log-file', '');
+$logFileArg = trim($logFileArg);
+
 // In CLI, make sure we can run longer imports
 @set_time_limit(0);
 
@@ -215,6 +221,37 @@ try {
     }
 } catch (Throwable $e) {
     // ignore
+}
+
+// Product log setup (after DIR_LOGS is defined)
+$logFile = $logFileArg;
+$logToStdout = false;
+if ($logProducts) {
+    if ($logFile === '') {
+        if (defined('DIR_LOGS')) {
+            $logFile = rtrim((string)DIR_LOGS, '/\\') . DIRECTORY_SEPARATOR . 'banggood_fetch_products.log';
+        }
+    }
+    if ($logFile === '') {
+        $logToStdout = true;
+    } else {
+        $logDir = dirname($logFile);
+        if (!is_dir($logDir) || !is_writable($logDir)) {
+            $logToStdout = true;
+            $logFile = '';
+        } elseif (file_exists($logFile) && !is_writable($logFile)) {
+            $logToStdout = true;
+            $logFile = '';
+        }
+    }
+}
+
+function bg_log_product_line(string $line, string $logFile, bool $logToStdout): void {
+    if ($logToStdout || $logFile === '') {
+        fwrite(STDOUT, $line . "\n");
+        return;
+    }
+    @file_put_contents($logFile, $line . "\n", FILE_APPEND);
 }
 
 // Language (some core models expect $this->language to exist)
@@ -390,6 +427,18 @@ try {
             $products = (!empty($res['products']) && is_array($res['products'])) ? $res['products'] : [];
             if (!$products) break;
 
+            if ($logProducts) {
+                $ts = gmdate('Y-m-d H:i:s');
+                $idx = 0;
+                foreach ($products as $p) {
+                    $encoded = json_encode($p, JSON_UNESCAPED_SLASHES);
+                    if ($encoded === false) $encoded = '';
+                    $line = $ts . " cat_id=" . $cat_id . " page=" . $currentPage . " idx=" . $idx . " product=" . $encoded;
+                    bg_log_product_line($line, $logFile, $logToStdout);
+                    $idx++;
+                }
+            }
+
             $remaining = $chunkSize - count($collected);
             $slice = array_slice($products, $currentOffset, $remaining);
             foreach ($slice as $p) {
@@ -556,6 +605,9 @@ try {
          " (created=" . $created . " updated=" . $updated . " skipped=" . $skipped . ")" .
          " Errors=" . $import_errors .
          " Finished=" . ($finished ? "1" : "0") . "\n";
+    if ($logProducts) {
+        echo "ProductLog=" . ($logToStdout ? "stdout" : $logFile) . "\n";
+    }
     if ($fetch_error !== '') {
         echo "FetchError=" . $fetch_error . "\n";
     }
