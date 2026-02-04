@@ -10,6 +10,8 @@
  * Usage:
  *   php cron/banggood_import_fetch_chunk.php --chunk-size=10
  *   php cron/banggood_import_fetch_chunk.php --chunk-size=10 --reset-cursor=1
+ *   php cron/banggood_import_fetch_chunk.php --set-cursor='{"category_index":371,"page":3,"offset":10}'
+ *   php cron/banggood_import_fetch_chunk.php --set-cursor-cat-id=10558 --set-cursor-page=4 --set-cursor-offset=7
  *
  * Notes:
  * - Must be placed in your OpenCart store root under /cron/
@@ -51,6 +53,14 @@ $logProducts = bg_arg($argv, 'log-products', '0');
 $logProducts = ($logProducts === '1' || strtolower((string)$logProducts) === 'true');
 $logFileArg = (string)bg_arg($argv, 'log-file', '');
 $logFileArg = trim($logFileArg);
+
+// Cursor set helpers (optional)
+$setCursorJson = (string)bg_arg($argv, 'set-cursor', '');
+$setCursorJson = trim($setCursorJson);
+$setCursorCatId = (string)bg_arg($argv, 'set-cursor-cat-id', '');
+$setCursorCatId = trim($setCursorCatId);
+$setCursorPage = (int)bg_arg($argv, 'set-cursor-page', '0');
+$setCursorOffset = (int)bg_arg($argv, 'set-cursor-offset', '0');
 
 // In CLI, make sure we can run longer imports
 @set_time_limit(0);
@@ -382,6 +392,51 @@ try {
 
     $total_categories = count($rows);
     $collected = [];
+
+    if ($setCursorJson !== '' || $setCursorCatId !== '') {
+        $newCursor = null;
+        if ($setCursorJson !== '') {
+            $decoded = @json_decode($setCursorJson, true);
+            if (is_array($decoded)) {
+                $newCursor = [
+                    'category_index' => isset($decoded['category_index']) ? max(0, (int)$decoded['category_index']) : 0,
+                    'page' => isset($decoded['page']) ? max(1, (int)$decoded['page']) : 1,
+                    'offset' => isset($decoded['offset']) ? max(0, (int)$decoded['offset']) : 0,
+                ];
+            }
+        } else {
+            $idx = null;
+            $needle = $setCursorCatId;
+            foreach ($rows as $i => $r) {
+                $cid = isset($r['cat_id']) ? (string)$r['cat_id'] : '';
+                if ($cid !== '' && $cid === $needle) { $idx = (int)$i; break; }
+            }
+            if ($idx !== null) {
+                $newCursor = [
+                    'category_index' => $idx,
+                    'page' => $setCursorPage > 0 ? $setCursorPage : 1,
+                    'offset' => $setCursorOffset >= 0 ? $setCursorOffset : 0,
+                ];
+            }
+        }
+
+        if (!$newCursor) {
+            fwrite(STDERR, "Unable to set cursor: invalid JSON or cat_id not found in leaf category list.\n");
+            exit(3);
+        }
+
+        $cursorNew = json_encode($newCursor);
+        if (method_exists($settingModel, 'editSettingValue')) {
+            $settingModel->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
+        } else {
+            $cur = $settingModel->getSetting('module_banggood_import');
+            if (!is_array($cur)) $cur = [];
+            $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
+            $settingModel->editSetting('module_banggood_import', $cur);
+        }
+        echo "Cursor set: " . $cursorNew . "\n";
+        exit(0);
+    }
 
     $next_category_index = $category_index;
     $next_page = $page;
