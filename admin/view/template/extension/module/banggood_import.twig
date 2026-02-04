@@ -445,8 +445,8 @@ var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'oth
 var bgQueuePage = 1;
 var bgQueueLimit = 50;
 var bgQueueSort = 'status';
-// Skip in-browser queue processing to avoid timeouts; use cron instead.
-var bgFetchOnly = true;
+// Process a small number in-browser after fetch (keeps UI responsive).
+var bgFetchOnly = false;
 
 // Bind import-by-id buttons inside a container
 function bindImportButtons($container) {
@@ -948,7 +948,7 @@ $('#btn-fetch-chunk').on('click', function(e){
   $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
 
   // Clear existing pending/processing FIRST (do not fetch new IDs until backlog is cleared).
-  var maxCycles = 10; // up to 10 imports per click (safe batch)
+  var maxCycles = 1; // process 1 per click to avoid timeouts
   var cyclesDone = 0;
 
   function finish() {
