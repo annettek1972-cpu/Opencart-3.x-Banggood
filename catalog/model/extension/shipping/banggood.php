@@ -17,8 +17,8 @@ class ModelExtensionShippingBanggood extends Model {
             return array();
         }
 
-        $country = $this->resolveCountryName($address);
-        if ($country === '') {
+        $countryCandidates = $this->resolveCountryCandidates($address);
+        if (empty($countryCandidates)) {
             return array(
                 'code' => 'banggood',
                 'title' => $this->language->get('text_title'),
@@ -36,6 +36,7 @@ class ModelExtensionShippingBanggood extends Model {
 
         $details = array();
         $totalCost = 0.0;
+        $errors = array();
 
         foreach ($products as $product) {
             $bg_id = $this->extractBanggoodId($product);
@@ -47,8 +48,31 @@ class ModelExtensionShippingBanggood extends Model {
             list($warehouse, $poa_id) = $this->resolveWarehouseAndPoa($product, $bg_id);
             if ($warehouse === '') continue;
 
-            $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
-            if (empty($resp) || !is_array($resp)) continue;
+            $resp = null;
+            $countryUsed = '';
+            foreach ($countryCandidates as $country) {
+                try {
+                    $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
+                    $countryUsed = $country;
+                    break;
+                } catch (Exception $e) {
+                    $msg = $e->getMessage();
+                    if (stripos($msg, 'code=12032') !== false || stripos($msg, 'Error country field') !== false) {
+                        // try next candidate
+                        $resp = null;
+                        continue;
+                    }
+                    $errors[] = $msg;
+                    $resp = null;
+                    break;
+                }
+            }
+            if (empty($resp) || !is_array($resp)) {
+                if (empty($errors)) {
+                    $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' to ' . ($countryUsed !== '' ? $countryUsed : 'destination');
+                }
+                continue;
+            }
 
             $shipment_list = array();
             if (!empty($resp['shipment_list']) && is_array($resp['shipment_list'])) {
@@ -78,6 +102,16 @@ class ModelExtensionShippingBanggood extends Model {
             $details[] = $productName . ': ' . $best['name'] . ' ' . $config['currency'] . number_format((float)$best['fee'], 2);
         }
 
+        if (!empty($errors)) {
+            return array(
+                'code' => 'banggood',
+                'title' => $this->language->get('text_title'),
+                'quote' => array(),
+                'sort_order' => (int)$this->config->get('shipping_banggood_sort_order'),
+                'error' => $errors[0]
+            );
+        }
+
         if (empty($details)) {
             return array();
         }
@@ -104,16 +138,28 @@ class ModelExtensionShippingBanggood extends Model {
         );
     }
 
-    protected function resolveCountryName($address) {
-        if (!empty($address['country'])) return strtolower(trim((string)$address['country']));
+    protected function resolveCountryCandidates($address) {
+        $candidates = array();
+        if (!empty($address['country'])) {
+            $candidates[] = strtolower(trim((string)$address['country']));
+        }
         if (!empty($address['country_id'])) {
             try {
                 $this->load->model('localisation/country');
                 $info = $this->model_localisation_country->getCountry($address['country_id']);
-                if (!empty($info['name'])) return strtolower(trim((string)$info['name']));
+                if (!empty($info['iso_code_2'])) $candidates[] = strtolower(trim((string)$info['iso_code_2']));
+                if (!empty($info['iso_code_3'])) $candidates[] = strtolower(trim((string)$info['iso_code_3']));
+                if (!empty($info['name'])) $candidates[] = strtolower(trim((string)$info['name']));
             } catch (Exception $e) {}
         }
-        return '';
+        // de-dup / remove empty
+        $out = array();
+        foreach ($candidates as $c) {
+            $c = trim($c);
+            if ($c === '') continue;
+            if (!in_array($c, $out, true)) $out[] = $c;
+        }
+        return $out;
     }
 
     protected function extractBanggoodId(array $product) {
