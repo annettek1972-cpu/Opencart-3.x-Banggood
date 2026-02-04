@@ -4,6 +4,7 @@ class ModelExtensionShippingBanggood extends Model {
     const LEGACY_PRODUCT_CODE_PREFIX = 'BG-';
 
     private $token_cache_file;
+    private $productInfoCache = array();
 
     public function __construct($registry) {
         parent::__construct($registry);
@@ -45,8 +46,8 @@ class ModelExtensionShippingBanggood extends Model {
             $quantity = isset($product['quantity']) ? (int)$product['quantity'] : 1;
             if ($quantity < 1) $quantity = 1;
 
-            $warehouseCandidates = $this->resolveWarehouseCandidates($product, $bg_id);
-            $poaCandidates = $this->resolvePoaIdCandidates($product, $bg_id);
+            $warehouseCandidates = $this->resolveWarehouseCandidates($product, $bg_id, $config);
+            $poaCandidates = $this->resolvePoaIdCandidates($product, $bg_id, $config);
 
             if (empty($warehouseCandidates)) {
                 $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' (no warehouse)';
@@ -185,7 +186,7 @@ class ModelExtensionShippingBanggood extends Model {
         return '';
     }
 
-    protected function resolveWarehouseCandidates(array $product, $bg_id) {
+    protected function resolveWarehouseCandidates(array $product, $bg_id, $config) {
         $candidates = array();
 
         if (!empty($product['option']) && is_array($product['option'])) {
@@ -215,6 +216,18 @@ class ModelExtensionShippingBanggood extends Model {
             }
         } catch (Exception $e) {}
 
+        // Fallback: fetch product info to read warehouse_list
+        if (empty($candidates)) {
+            $info = $this->getProductInfoCached($bg_id, $config);
+            if (is_array($info) && !empty($info['warehouse_list']) && is_array($info['warehouse_list'])) {
+                foreach ($info['warehouse_list'] as $w) {
+                    if (isset($w['warehouse']) && $w['warehouse'] !== '') $candidates[] = trim((string)$w['warehouse']);
+                    if (isset($w['warehouse_name']) && $w['warehouse_name'] !== '') $candidates[] = trim((string)$w['warehouse_name']);
+                    if (isset($w['warehouse_key']) && $w['warehouse_key'] !== '') $candidates[] = trim((string)$w['warehouse_key']);
+                }
+            }
+        }
+
         $out = array();
         foreach ($candidates as $c) {
             $c = trim($c);
@@ -224,7 +237,7 @@ class ModelExtensionShippingBanggood extends Model {
         return $out;
     }
 
-    protected function resolvePoaIdCandidates(array $product, $bg_id) {
+    protected function resolvePoaIdCandidates(array $product, $bg_id, $config) {
         $candidates = array();
         $option_value_ids = array();
         if (!empty($product['option']) && is_array($product['option'])) {
@@ -270,6 +283,21 @@ class ModelExtensionShippingBanggood extends Model {
             } catch (Exception $e) {}
         }
 
+        // Fallback: fetch product info to read poa_list
+        if (empty($candidates)) {
+            $info = $this->getProductInfoCached($bg_id, $config);
+            if (is_array($info) && !empty($info['poa_list']) && is_array($info['poa_list'])) {
+                foreach ($info['poa_list'] as $group) {
+                    $values = array();
+                    if (!empty($group['option_values']) && is_array($group['option_values'])) $values = $group['option_values'];
+                    elseif (!empty($group['values']) && is_array($group['values'])) $values = $group['values'];
+                    foreach ($values as $v) {
+                        if (!empty($v['poa_id'])) $candidates[] = (string)$v['poa_id'];
+                    }
+                }
+            }
+        }
+
         $out = array();
         foreach ($candidates as $c) {
             $c = trim((string)$c);
@@ -294,6 +322,29 @@ class ModelExtensionShippingBanggood extends Model {
         if ($raw === null) return 0.0;
         $num = (float)str_replace(',', '', preg_replace('/[^\d\.\-]/', '', (string)$raw));
         return $num;
+    }
+
+    protected function getProductInfoCached($bg_id, $config) {
+        $bg_id = (string)$bg_id;
+        if ($bg_id === '') return null;
+        if (isset($this->productInfoCache[$bg_id])) {
+            return $this->productInfoCache[$bg_id];
+        }
+        try {
+            $resp = $this->apiRequest($config, 'product/getProductInfo', 'GET', array(
+                'product_id' => $bg_id,
+                'lang' => $config['lang'],
+                'currency' => $config['currency']
+            ));
+            if (is_array($resp) && (isset($resp['product']) && is_array($resp['product']))) {
+                $this->productInfoCache[$bg_id] = $resp['product'];
+            } else {
+                $this->productInfoCache[$bg_id] = $resp;
+            }
+        } catch (Exception $e) {
+            $this->productInfoCache[$bg_id] = null;
+        }
+        return $this->productInfoCache[$bg_id];
     }
 
     protected function getCacheDays() {
