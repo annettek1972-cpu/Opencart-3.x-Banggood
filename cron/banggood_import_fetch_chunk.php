@@ -575,6 +575,10 @@ try {
             $res = null;
             $usedMode = $importMode;
             $variantSync = false;
+            $updateMode = 'full';
+            $rowStatus = '';
+            if (isset($row['status'])) $rowStatus = strtolower(trim((string)$row['status']));
+            $forceLightUpdate = ($rowStatus === 'updated');
 
             // Try to locate a URL in the persisted row (raw_json) when using auto/url.
             $url = '';
@@ -587,8 +591,12 @@ try {
                 }
             }
 
-            if ($importMode === 'id') {
-                $res = $bgModel->importProductById($pid);
+            if ($forceLightUpdate) {
+                $updateMode = 'light';
+                $usedMode = 'id';
+                $res = $bgModel->importProductById($pid, $updateMode);
+            } elseif ($importMode === 'id') {
+                $res = $bgModel->importProductById($pid, $updateMode);
             } else {
                 // If we don't have a real URL in the queue, use a synthetic Banggood URL that still matches
                 // extractProductIdFromUrl() regexes. This guarantees the URL-import pipeline is used.
@@ -630,7 +638,8 @@ try {
             elseif ($r === 'skip') $skipped++;
 
             if ($verbose) {
-                fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$usedMode}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
+                $modeLabel = $usedMode . ($updateMode === 'light' ? "+light" : "");
+                fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$modeLabel}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
             try { $bgModel->markFetchedProductError($pid, $e->getMessage()); } catch (Throwable $x) {}

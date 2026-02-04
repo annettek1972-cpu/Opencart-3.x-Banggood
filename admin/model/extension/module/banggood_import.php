@@ -746,10 +746,14 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $tbl = $this->getFetchedProductsTableName();
         $now = date('Y-m-d H:i:s');
         $count = 0;
+        $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
+        $importedCol = $this->getFetchedProductsImportedAtColumnName();
+        $ocCache = array();
 
         foreach ($products as $p) {
             if (!is_array($p) || empty($p['product_id'])) continue;
-            $bgid = $this->db->escape((string)$p['product_id']);
+            $bgidRaw = (string)$p['product_id'];
+            $bgid = $this->db->escape($bgidRaw);
             $cat = isset($p['cat_id']) ? $this->db->escape((string)$p['cat_id']) : '';
             $name = isset($p['product_name']) ? $this->db->escape((string)$p['product_name']) : (isset($p['name']) ? $this->db->escape((string)$p['name']) : '');
             $img = isset($p['img']) ? $this->db->escape((string)$p['img']) : '';
@@ -757,18 +761,45 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             // Use JSON_UNESCAPED_UNICODE to keep readable stored JSON; escape for DB
             $rawJson = $this->db->escape(json_encode($p, JSON_UNESCAPED_UNICODE));
 
-            // Insert or update existing row. Do not change status if existing status = 'imported'
+            // Determine whether this product already exists in OpenCart.
+            if (array_key_exists($bgidRaw, $ocCache)) {
+                $existsInOc = (bool)$ocCache[$bgidRaw];
+            } else {
+                $existsInOc = $this->findExistingProductByBanggoodId($bgidRaw) ? true : false;
+                $ocCache[$bgidRaw] = $existsInOc;
+            }
+
+            // Status policy:
+            // - if in OpenCart already -> mark as updated (price/options/images refresh)
+            // - otherwise -> pending (import as normal)
+            $status = $existsInOc ? 'updated' : 'pending';
+            $statusEsc = $this->db->escape($status);
+
+            $statusUpdates = array(
+                "`status` = '" . $statusEsc . "'",
+                "`last_error` = NULL",
+                "`attempts` = 0"
+            );
+            if ($status === 'updated' && $updatedCol) {
+                $statusUpdates[] = "`" . $updatedCol . "` = NULL";
+            }
+            if ($status === 'pending' && $importedCol) {
+                $statusUpdates[] = "`" . $importedCol . "` = NULL";
+            }
+
+            // Insert or update existing row and reset status as needed.
             // ON DUPLICATE KEY UPDATE will overwrite metadata and fetched_at
             $sql = "INSERT INTO `" . $tbl . "`
-                (`bg_product_id`,`cat_id`,`name`,`img`,`meta_desc`,`raw_json`,`fetched_at`)
-                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "')
+                (`bg_product_id`,`cat_id`,`name`,`img`,`meta_desc`,`raw_json`,`fetched_at`,`status`)
+                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "','" . $statusEsc . "')
                 ON DUPLICATE KEY UPDATE
                   `cat_id` = VALUES(`cat_id`),
                   `name` = VALUES(`name`),
                   `img` = VALUES(`img`),
                   `meta_desc` = VALUES(`meta_desc`),
                   `raw_json` = VALUES(`raw_json`),
-                  `fetched_at` = VALUES(`fetched_at`)";
+                  `fetched_at` = VALUES(`fetched_at`), "
+                  . implode(', ', $statusUpdates);
             $this->db->query($sql);
             $count++;
         }
@@ -902,8 +933,9 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
      * Import a product by Banggood product ID.
      * Uses existing fetchProductDetail(), normalizeProduct(), and upsertProduct() helpers already in this model.
      * Returns array('result' => 'created'|'updated'|'skip') or throws on fatal.
+     * $updateMode: 'full' (default) or 'light' (price/options/images only).
      */
-    public function importProductById($product_id) {
+    public function importProductById($product_id, $updateMode = 'full') {
         if (empty($product_id)) throw new Exception('Empty product id');
 
         // Controlled mapping writes: enable if admin has allowed it (same behavior as other import methods)
@@ -924,7 +956,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
 
             // normalize and upsert
             $normalized = $this->normalizeProduct($raw, $config);
-            $result = $this->upsertProduct($normalized);
+            $result = $this->upsertProduct($normalized, $updateMode);
 
             // IMPORTANT: Ensure GetStocks is applied on (re)import so that:
             // - product_option_value quantities are updated
@@ -2596,12 +2628,12 @@ protected function apiRequestRawSimple($url) {
         return array('bg_id' => $product_id, 'name' => $title, 'description' => $description, 'price' => $price, 'images' => $images, 'main_image' => $main_image, 'local_images' => $local_images, 'quantity' => $quantity, 'status' => $status, 'bg_category_id' => $bg_category_id, 'raw' => $raw);
     }
 
-    protected function upsertProduct($normalized) {
+    protected function upsertProduct($normalized, $updateMode = 'full') {
         $this->load->model('catalog/product');
         $bg_id = (string)$normalized['bg_id'];
         if ($bg_id === '') return 'skip';
         $existing_product_id = $this->findExistingProductByBanggoodId($bg_id);
-        if ($existing_product_id) { $this->updateExistingProduct($existing_product_id, $normalized); return 'updated'; }
+        if ($existing_product_id) { $this->updateExistingProduct($existing_product_id, $normalized, $updateMode); return 'updated'; }
         else { $this->createNewProduct($normalized); return 'created'; }
     }
 
@@ -2773,9 +2805,11 @@ protected function apiRequestRawSimple($url) {
      * - bolds label:value segments and enforces space after semicolons
      * - updates product row and product_description without deleting option/custom-tab/poip tables
      */
-   protected function updateExistingProduct($product_id, $normalized) {
+   protected function updateExistingProduct($product_id, $normalized, $mode = 'full') {
     $product_id = (int)$product_id;
     if (!$product_id) return;
+    $mode = strtolower((string)$mode);
+    if ($mode !== 'light') $mode = 'full';
 
     $this->load->model('localisation/language');
     $languages = $this->model_localisation_language->getLanguages();
@@ -2826,42 +2860,55 @@ protected function apiRequestRawSimple($url) {
     $main_image = isset($normalized['main_image']) ? $this->toRelativeImagePath($normalized['main_image']) : $product_info['image'];
     $yesterday = date('Y-m-d', strtotime('-1 day'));
 
-    // Update product table, but avoid overwriting quantity/stock_status_id here.
-    // We'll let applyStocksToProduct compute and persist the authoritative stock values when available.
-    $this->db->query(
-        "UPDATE `" . DB_PREFIX . "product` SET
-            `model` = '" . $this->db->escape($model_code) . "',
-            `sku` = '" . $this->db->escape($product_info['sku']) . "',
-            `upc` = '" . $this->db->escape($product_info['upc']) . "',
-            `ean` = '" . $this->db->escape($product_info['ean']) . "',
-            `jan` = '" . $this->db->escape($product_info['jan']) . "',
-            `isbn` = '" . $this->db->escape($product_info['isbn']) . "',
-            `mpn` = '" . $this->db->escape($product_info['mpn']) . "',
-            `location` = '" . $this->db->escape($product_info['location']) . "',
-            `image` = '" . $this->db->escape($main_image) . "',
-            `manufacturer_id` = '" . (int)$product_info['manufacturer_id'] . "',
-            `shipping` = '" . (int)$product_info['shipping'] . "',
-            `price` = '" . (float)$price . "',
-            `points` = '" . (int)$product_info['points'] . "',
-            `tax_class_id` = '" . (int)$product_info['tax_class_id'] . "',
-            `date_available` = '" . $this->db->escape($yesterday) . "',
-            `weight` = '" . (float)$product_info['weight'] . "',
-            `weight_class_id` = '" . (int)$product_info['weight_class_id'] . "',
-            `length` = '" . (float)$product_info['length'] . "',
-            `width` = '" . (float)$product_info['width'] . "',
-            `height` = '" . (float)$product_info['height'] . "',
-            `length_class_id` = '" . (int)$product_info['length_class_id'] . "',
-            `subtract` = '" . (int)$product_info['subtract'] . "',
-            `minimum` = '" . (int)$product_info['minimum'] . "',
-            `sort_order` = '" . (int)$product_info['sort_order'] . "',
-            `status` = 1
-         WHERE product_id = " . (int)$product_id
-    );
+    // Update product table.
+    // - full: update standard fields
+    // - light: only update price and main image
+    if ($mode === 'light') {
+        $this->db->query(
+            "UPDATE `" . DB_PREFIX . "product` SET
+                `image` = '" . $this->db->escape($main_image) . "',
+                `price` = '" . (float)$price . "'
+             WHERE product_id = " . (int)$product_id
+        );
+    } else {
+        // Avoid overwriting quantity/stock_status_id here.
+        // We'll let applyStocksToProduct compute and persist the authoritative stock values when available.
+        $this->db->query(
+            "UPDATE `" . DB_PREFIX . "product` SET
+                `model` = '" . $this->db->escape($model_code) . "',
+                `sku` = '" . $this->db->escape($product_info['sku']) . "',
+                `upc` = '" . $this->db->escape($product_info['upc']) . "',
+                `ean` = '" . $this->db->escape($product_info['ean']) . "',
+                `jan` = '" . $this->db->escape($product_info['jan']) . "',
+                `isbn` = '" . $this->db->escape($product_info['isbn']) . "',
+                `mpn` = '" . $this->db->escape($product_info['mpn']) . "',
+                `location` = '" . $this->db->escape($product_info['location']) . "',
+                `image` = '" . $this->db->escape($main_image) . "',
+                `manufacturer_id` = '" . (int)$product_info['manufacturer_id'] . "',
+                `shipping` = '" . (int)$product_info['shipping'] . "',
+                `price` = '" . (float)$price . "',
+                `points` = '" . (int)$product_info['points'] . "',
+                `tax_class_id` = '" . (int)$product_info['tax_class_id'] . "',
+                `date_available` = '" . $this->db->escape($yesterday) . "',
+                `weight` = '" . (float)$product_info['weight'] . "',
+                `weight_class_id` = '" . (int)$product_info['weight_class_id'] . "',
+                `length` = '" . (float)$product_info['length'] . "',
+                `width` = '" . (float)$product_info['width'] . "',
+                `height` = '" . (float)$product_info['height'] . "',
+                `length_class_id` = '" . (int)$product_info['length_class_id'] . "',
+                `subtract` = '" . (int)$product_info['subtract'] . "',
+                `minimum` = '" . (int)$product_info['minimum'] . "',
+                `sort_order` = '" . (int)$product_info['sort_order'] . "',
+                `status` = 1
+             WHERE product_id = " . (int)$product_id
+        );
+    }
 
     // NOTE: intentionally do NOT update product_description here (we only set description on first import)
 
-    // Parse extracted tables into attributes/custom tabs (non-destructive)
-    if (!empty($extracted_tables)) {
+    // Parse extracted tables into attributes/custom tabs (non-destructive).
+    // Skip in light mode (price/options/images only).
+    if ($mode !== 'light' && !empty($extracted_tables)) {
         foreach ($extracted_tables as $table_html) {
             try {
                 $this->parseDescriptionTableToAttributes($table_html, isset($normalized['bg_id']) ? $normalized['bg_id'] : '', (int)$product_id);
