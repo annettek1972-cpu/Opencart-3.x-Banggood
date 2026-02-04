@@ -132,6 +132,11 @@
                   <select id="bg-queue-sort" class="form-control input-sm" style="width:130px;height:24px;padding:2px 6px;" title="Sort order">
                     <option value="status" selected="selected">Sort: Status</option>
                     <option value="newest">Sort: Newest</option>
+                    <option value="pending">Sort: Pending</option>
+                    <option value="processing">Sort: Processing</option>
+                    <option value="updated">Sort: Updated</option>
+                    <option value="imported">Sort: Imported</option>
+                    <option value="error">Sort: Error</option>
                   </select>
                   <select id="bg-queue-limit" class="form-control input-sm" style="width:90px;height:24px;padding:2px 6px;" title="Rows per page">
                     <option value="25">25</option>
@@ -1272,8 +1277,17 @@ $(document).ready(function() {
     refreshPersistedQueueOnce();
   });
   $('#bg-queue-sort').on('change', function(){
-    var v = ($(this).val() || '').toString();
-    if (v !== 'newest') v = 'status';
+    var v = ($(this).val() || '').toString().toLowerCase();
+    var allowed = {
+      status: true,
+      newest: true,
+      pending: true,
+      processing: true,
+      updated: true,
+      imported: true,
+      error: true
+    };
+    if (!allowed[v]) v = 'status';
     bgQueueSort = v;
     bgQueuePage = 1;
     bgProductsMode = 'persisted';

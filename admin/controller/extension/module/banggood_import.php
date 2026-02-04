@@ -75,10 +75,11 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             $color_red = '#dc3545';
             $color_gray = '#6c757d';
             $color_blue = '#007bff';
+            $color_orange = '#f0ad4e';
 
             $badgeBg = $color_gray;
             if ($status === 'imported') $badgeBg = $color_green;
-            elseif ($status === 'updated') $badgeBg = ($updated_at ? $color_green : $color_red);
+            elseif ($status === 'updated') $badgeBg = $color_orange;
             elseif ($status === 'error') $badgeBg = $color_red;
             elseif ($status === 'processing') $badgeBg = $color_blue;
             elseif ($status === 'pending') $badgeBg = $color_gray;
@@ -1417,7 +1418,8 @@ HTML;
             if ($limit > 200) $limit = 200;
 
             $sort = isset($this->request->post['sort']) ? strtolower(trim((string)$this->request->post['sort'])) : 'status';
-            if ($sort !== 'newest') $sort = 'status';
+            $allowedSort = array('status', 'newest', 'pending', 'processing', 'updated', 'imported', 'error');
+            if (!in_array($sort, $allowedSort, true)) $sort = 'status';
 
             $tbl = $this->getFetchedProductsTableName();
             $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
@@ -1465,17 +1467,26 @@ HTML;
             if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
             else $selectExtra .= ", NULL AS updated_at";
 
+            $statusRankSql = "CASE
+                WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
+                WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
+                WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
+                WHEN LOWER(TRIM(`status`)) = 'updated' THEN 3
+                WHEN LOWER(TRIM(`status`)) = 'imported' THEN 4
+                ELSE 5
+              END";
+
             $orderSql = '';
             if ($sort === 'newest') {
                 $orderSql = "`fetched_at` DESC, `id` DESC";
+            } elseif ($sort === 'status') {
+                $orderSql = $statusRankSql . " ASC, `fetched_at` DESC, `id` DESC";
             } else {
                 $orderSql = "CASE
-                    WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
-                    WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
-                    WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
-                    WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 3
-                    ELSE 4
+                    WHEN LOWER(TRIM(`status`)) = '" . $this->db->escape($sort) . "' THEN 0
+                    ELSE 1
                   END ASC,
+                  " . $statusRankSql . " ASC,
                   `fetched_at` DESC, `id` DESC";
             }
 
@@ -1515,10 +1526,11 @@ HTML;
                     $color_red = '#dc3545';
                     $color_gray = '#6c757d';
                     $color_blue = '#007bff';
+                    $color_orange = '#f0ad4e';
 
                     $badgeBg = $color_gray;
                     if ($status === 'imported') $badgeBg = $color_green;
-                    elseif ($status === 'updated') $badgeBg = ($updated_at ? $color_green : $color_red);
+                    elseif ($status === 'updated') $badgeBg = $color_orange;
                     elseif ($status === 'error') $badgeBg = $color_red;
                     elseif ($status === 'processing') $badgeBg = $color_blue;
                     elseif ($status === 'pending') $badgeBg = $color_gray;

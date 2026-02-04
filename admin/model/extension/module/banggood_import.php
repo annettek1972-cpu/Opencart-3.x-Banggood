@@ -863,7 +863,15 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             $where .= " OR `status` = 'updated'";
         }
 
-        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
+        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY
+            CASE
+              WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
+              WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1
+              ELSE 2
+            END ASC,
+            `fetched_at` ASC,
+            `id` ASC
+            LIMIT " . (int)$limit);
         $rows = $qr->rows;
 
         if (!empty($rows)) {
