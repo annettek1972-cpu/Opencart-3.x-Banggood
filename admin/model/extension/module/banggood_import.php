@@ -949,6 +949,23 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
     }
 
     /**
+     * Reset a fetched product back to pending/updated for retry (no error).
+     */
+    public function markFetchedProductRetry($bg_product_id, $status = 'pending') {
+        if (empty($bg_product_id)) return;
+        $this->ensureFetchedProductsTableExists();
+        $tbl = $this->getFetchedProductsTableName();
+        $status = strtolower(trim((string)$status));
+        if ($status !== 'updated') $status = 'pending';
+        $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
+        $importedCol = $this->getFetchedProductsImportedAtColumnName();
+        $set = array("`status` = '" . $this->db->escape($status) . "'", "`last_error` = NULL");
+        if ($status === 'updated' && $updatedCol) $set[] = "`" . $updatedCol . "` = NULL";
+        if ($status === 'pending' && $importedCol) $set[] = "`" . $importedCol . "` = NULL";
+        $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
+    }
+
+    /**
      * Return simple stats about fetched products (pending/processing/imported/error/total).
      */
     public function getFetchedProductsStats() {

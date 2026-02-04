@@ -516,6 +516,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_queue_imported'] = 0;
         $data['bg_queue_updated'] = 0;
         $data['bg_queue_error'] = 0;
+        $data['bg_queue_total'] = (int)$total_count;
         // IMPORTANT: compute directly from DB (proxy-safe; exact across oc_bg_fetched_products).
         try {
             $tbl = $this->getFetchedProductsTableName();
@@ -526,7 +527,8 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
-                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error,
+                    COUNT(*) AS total
                     FROM `" . $tbl . "`")->row;
                 if (is_array($st)) {
                     $data['bg_queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
@@ -534,6 +536,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
                     $data['bg_queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
                     $data['bg_queue_updated'] = isset($st['updated']) ? (int)$st['updated'] : 0;
                     $data['bg_queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+                    $data['bg_queue_total'] = isset($st['total']) ? (int)$st['total'] : (int)$total_count;
                 }
             }
         } catch (\Throwable $e) {}
@@ -1436,19 +1439,22 @@ HTML;
             $json['queue_imported'] = 0;
             $json['queue_updated'] = 0;
             $json['queue_error'] = 0;
+            $json['queue_total'] = 0;
             try {
                 $st = $this->db->query("SELECT
                     SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
-                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error,
+                    COUNT(*) AS total
                     FROM `" . $tbl . "`")->row;
                 $json['queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
                 $json['queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
                 $json['queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
                 $json['queue_updated'] = isset($st['updated']) ? (int)$st['updated'] : 0;
                 $json['queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+                $json['queue_total'] = isset($st['total']) ? (int)$st['total'] : 0;
             } catch (\Throwable $e) {
                 // Non-fatal; banner can fall back to existing values.
             }
@@ -1570,6 +1576,7 @@ HTML;
             $json['page_total'] = (int)$page_total;
             $json['limit'] = (int)$limit;
             $json['total_count'] = (int)$total_count;
+            if (!$json['queue_total']) $json['queue_total'] = (int)$total_count;
         } catch (\Throwable $e) {
             $json['error'] = 'getFetchedProductsListPaged failed: ' . $e->getMessage();
         }
@@ -2531,8 +2538,19 @@ HTML;
                         } catch (\Throwable $e4) {}
                         $results['success']++;
                     } catch (Exception $e) {
-                        try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage()); } catch (\Throwable $x) {}
+                    $msg = $e->getMessage();
+                    $isAccessRestricted = (stripos($msg, 'code=41010') !== false || stripos($msg, 'Access restrictions') !== false);
+                    if ($isAccessRestricted) {
+                        try { $this->model_extension_module_banggood_import->markFetchedProductRetry($bgid, $forceLightUpdate ? 'updated' : 'pending'); } catch (\Throwable $x) {}
+                        // Abort further processing; access restricted.
                         $results['errors']++;
+                        $results['access_restricted'] = 1;
+                        $results['access_restricted_message'] = $msg;
+                        break 2;
+                    } else {
+                        try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $msg); } catch (\Throwable $x) {}
+                        $results['errors']++;
+                    }
                     }
                     $results['processed']++;
                 }

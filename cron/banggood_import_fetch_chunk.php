@@ -553,7 +553,9 @@ try {
     $skipped = 0;
 
     $claimed = 0;
-    $processRow = function(array $row) use ($bgModel, $importMode, $ensureVariants, $verbose, &$imported, &$import_errors, &$firstError, &$created, &$updated, &$skipped) {
+    $accessRestricted = false;
+    $accessRestrictedMessage = '';
+    $processRow = function(array $row) use ($bgModel, $importMode, $ensureVariants, $verbose, &$imported, &$import_errors, &$firstError, &$created, &$updated, &$skipped, &$accessRestricted, &$accessRestrictedMessage) {
         $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
         if ($pid === '') return;
         try {
@@ -632,11 +634,23 @@ try {
                 fwrite(STDOUT, "Imported bg_product_id={$pid} mode={$modeLabel}" . ($variantSync ? "+variantSync" : "") . " result=" . ($r !== '' ? $r : 'ok') . "\n");
             }
         } catch (Throwable $e) {
-            try { $bgModel->markFetchedProductError($pid, $e->getMessage()); } catch (Throwable $x) {}
-            $import_errors++;
-            if ($firstError === '') $firstError = $e->getMessage();
+            $msg = $e->getMessage();
+            $isAccessRestricted = false;
+            if (stripos($msg, 'code=41010') !== false || stripos($msg, 'Access restrictions') !== false) {
+                $isAccessRestricted = true;
+            }
+            if ($isAccessRestricted) {
+                $accessRestricted = true;
+                $accessRestrictedMessage = $msg;
+                // Reset to pending/updated so it can be retried after next fetch.
+                try { $bgModel->markFetchedProductRetry($pid, $forceLightUpdate ? 'updated' : 'pending'); } catch (Throwable $x) {}
+            } else {
+                try { $bgModel->markFetchedProductError($pid, $msg); } catch (Throwable $x) {}
+                $import_errors++;
+                if ($firstError === '') $firstError = $msg;
+            }
             if ($verbose) {
-                fwrite(STDERR, "ERROR bg_product_id={$pid} " . $e->getMessage() . "\n");
+                fwrite(STDERR, "ERROR bg_product_id={$pid} " . $msg . "\n");
             }
         }
     };
@@ -646,11 +660,13 @@ try {
     // Try to claim and process one row at a time so only the active row shows "processing".
     try {
         for ($i = 0; $i < $chunkSize; $i++) {
+            if ($accessRestricted) break;
             $rows = $bgModel->fetchPendingForProcessing(1);
             if (empty($rows)) break;
             $claimed += count($rows);
             foreach ($rows as $row) {
                 $processRow($row);
+                if ($accessRestricted) break;
             }
         }
     } catch (Throwable $e) {
@@ -664,6 +680,7 @@ try {
             if ($pid === '') continue;
             $claimed++;
             $processRow(array('bg_product_id' => $pid));
+            if ($accessRestricted) break;
         }
     }
 
@@ -687,6 +704,12 @@ try {
          " Finished=" . ($finished ? "1" : "0") . "\n";
     if ($logProducts) {
         echo "ProductLog=" . ($logToStdout ? "stdout" : $logFile) . "\n";
+    }
+    if ($accessRestricted) {
+        echo "AccessRestricted=1\n";
+        if ($accessRestrictedMessage !== '') {
+            echo "AccessRestrictedMessage=" . $accessRestrictedMessage . "\n";
+        }
     }
     if ($fetch_error !== '') {
         echo "FetchError=" . $fetch_error . "\n";

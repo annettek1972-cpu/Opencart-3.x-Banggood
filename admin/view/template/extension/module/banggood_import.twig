@@ -85,6 +85,7 @@
             <div id="bg-cron-status"
                  style="margin-bottom:10px;padding:8px 10px;border-radius:4px; color: {{ bg_cron_has_error ? '#fff' : '#fff' }}; background: {{ bg_cron_has_error ? '#d9534f' : '#5cb85c' }};">
               <strong>Cron</strong> —
+              Total: {{ bg_queue_total|default(0) }},
               Pending: {{ bg_queue_pending|default(0) }},
               Processing: {{ bg_queue_processing|default(0) }},
               Imported: {{ bg_queue_imported|default(0) }},
@@ -1178,7 +1179,8 @@ $(document).ready(function() {
   var bgQueueRefreshInFlight = false;
   var lastQueueHtml = null;
 
-  function updateCronBannerExact(pending, processing, imported, updated, errors) {
+  function updateCronBannerExact(total, pending, processing, imported, updated, errors) {
+    total = parseInt(total, 10) || 0;
     pending = parseInt(pending, 10) || 0;
     processing = parseInt(processing, 10) || 0;
     imported = parseInt(imported, 10) || 0;
@@ -1195,6 +1197,7 @@ $(document).ready(function() {
     });
     $banner.html(
       '<strong>Cron</strong> — ' +
+      'Total: ' + total + ', ' +
       'Pending: ' + pending + ', ' +
       'Processing: ' + processing + ', ' +
       'Imported: ' + imported + ', ' +
@@ -1206,7 +1209,8 @@ $(document).ready(function() {
   // Use server-provided global counts (exact across oc_bg_fetched_products).
   function updateCronBannerFromJson(json) {
     if (!json || typeof json.queue_pending === 'undefined') return;
-    updateCronBannerExact(json.queue_pending, json.queue_processing, json.queue_imported, json.queue_updated, json.queue_error);
+    var total = (typeof json.queue_total !== 'undefined') ? json.queue_total : (json.total_count || 0);
+    updateCronBannerExact(total, json.queue_pending, json.queue_processing, json.queue_imported, json.queue_updated, json.queue_error);
   }
 
   function syncQueuePagerUi(page, pageTotal) {
