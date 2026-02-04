@@ -948,7 +948,7 @@ $('#btn-fetch-chunk').on('click', function(e){
   $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
 
   // Clear existing pending/processing FIRST (do not fetch new IDs until backlog is cleared).
-  var maxCycles = 1; // process 1 per click to avoid timeouts
+  var maxCycles = count; // process up to the requested count
   var cyclesDone = 0;
 
   function finish() {
@@ -1046,8 +1046,8 @@ $('#btn-fetch-chunk').on('click', function(e){
             }
             if (json.html) $panel.append(json.html);
 
-            // Import the first newly queued item
-            cyclesDone = maxCycles - 1; // allow exactly one more import
+            // Import queued items after fetch
+            cyclesDone = 0;
             $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
             setTimeout(drainQueueOnce, 250);
           },
