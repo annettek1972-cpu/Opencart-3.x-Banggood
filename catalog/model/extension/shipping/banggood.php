@@ -55,16 +55,14 @@ class ModelExtensionShippingBanggood extends Model {
             }
 
             if (empty($poaCandidates)) $poaCandidates = array('');
+            if (!in_array('', $poaCandidates, true)) $poaCandidates[] = '';
 
             $best = null;
             $countryUsed = '';
-            $attempts = 0;
-            $maxAttempts = 12;
+            $found = false;
             foreach ($warehouseCandidates as $warehouse) {
                 foreach ($poaCandidates as $poa_id) {
                     foreach ($countryCandidates as $country) {
-                        $attempts++;
-                        if ($attempts > $maxAttempts) break 3;
                         try {
                             $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
                             $countryUsed = $country;
@@ -87,6 +85,8 @@ class ModelExtensionShippingBanggood extends Model {
                                     );
                                 }
                             }
+                            $found = ($best !== null);
+                            if ($found) break 3;
                         } catch (Exception $e) {
                             $msg = $e->getMessage();
                             if (stripos($msg, 'code=12032') !== false || stripos($msg, 'Error country field') !== false ||
