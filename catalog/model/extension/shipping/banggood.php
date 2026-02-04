@@ -45,57 +45,67 @@ class ModelExtensionShippingBanggood extends Model {
             $quantity = isset($product['quantity']) ? (int)$product['quantity'] : 1;
             if ($quantity < 1) $quantity = 1;
 
-            list($warehouse, $poa_id) = $this->resolveWarehouseAndPoa($product, $bg_id);
-            if ($warehouse === '') continue;
+            $warehouseCandidates = $this->resolveWarehouseCandidates($product, $bg_id);
+            $poaCandidates = $this->resolvePoaIdCandidates($product, $bg_id);
 
-            $resp = null;
+            if (empty($warehouseCandidates)) {
+                $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' (no warehouse)';
+                continue;
+            }
+
+            if (empty($poaCandidates)) $poaCandidates = array('');
+
+            $best = null;
             $countryUsed = '';
-            foreach ($countryCandidates as $country) {
-                try {
-                    $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
-                    $countryUsed = $country;
-                    break;
-                } catch (Exception $e) {
-                    $msg = $e->getMessage();
-                    if (stripos($msg, 'code=12032') !== false || stripos($msg, 'Error country field') !== false) {
-                        // try next candidate
-                        $resp = null;
-                        continue;
+            $attempts = 0;
+            $maxAttempts = 12;
+            foreach ($warehouseCandidates as $warehouse) {
+                foreach ($poaCandidates as $poa_id) {
+                    foreach ($countryCandidates as $country) {
+                        $attempts++;
+                        if ($attempts > $maxAttempts) break 3;
+                        try {
+                            $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
+                            $countryUsed = $country;
+                            $shipment_list = array();
+                            if (!empty($resp['shipment_list']) && is_array($resp['shipment_list'])) {
+                                $shipment_list = $resp['shipment_list'];
+                            } elseif (!empty($resp['data']['shipment_list']) && is_array($resp['data']['shipment_list'])) {
+                                $shipment_list = $resp['data']['shipment_list'];
+                            }
+                            if (empty($shipment_list)) continue;
+
+                            foreach ($shipment_list as $s) {
+                                $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
+                                if ($best === null || $fee < $best['fee']) {
+                                    $best = array(
+                                        'fee' => $fee,
+                                        'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping'),
+                                        'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
+                                        'warehouse' => $warehouse
+                                    );
+                                }
+                            }
+                        } catch (Exception $e) {
+                            $msg = $e->getMessage();
+                            if (stripos($msg, 'code=12032') !== false || stripos($msg, 'Error country field') !== false ||
+                                stripos($msg, 'code=12031') !== false || stripos($msg, 'Error warehouse field') !== false ||
+                                stripos($msg, 'code=12033') !== false || stripos($msg, 'Error poa_id field') !== false) {
+                                continue;
+                            }
+                            $errors[] = $msg;
+                            break 3;
+                        }
                     }
-                    $errors[] = $msg;
-                    $resp = null;
-                    break;
                 }
             }
-            if (empty($resp) || !is_array($resp)) {
+
+            if ($best === null) {
                 if (empty($errors)) {
                     $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' to ' . ($countryUsed !== '' ? $countryUsed : 'destination');
                 }
                 continue;
             }
-
-            $shipment_list = array();
-            if (!empty($resp['shipment_list']) && is_array($resp['shipment_list'])) {
-                $shipment_list = $resp['shipment_list'];
-            } elseif (!empty($resp['data']['shipment_list']) && is_array($resp['data']['shipment_list'])) {
-                $shipment_list = $resp['data']['shipment_list'];
-            }
-
-            if (empty($shipment_list)) continue;
-
-            $best = null;
-            foreach ($shipment_list as $s) {
-                $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
-                if ($best === null || $fee < $best['fee']) {
-                    $best = array(
-                        'fee' => $fee,
-                        'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping'),
-                        'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '')
-                    );
-                }
-            }
-
-            if ($best === null) continue;
 
             $totalCost += (float)$best['fee'];
             $productName = isset($product['name']) ? $product['name'] : $bg_id;
@@ -175,32 +185,54 @@ class ModelExtensionShippingBanggood extends Model {
         return '';
     }
 
-    protected function resolveWarehouseAndPoa(array $product, $bg_id) {
-        $warehouse = '';
-        $poa_id = '';
+    protected function resolveWarehouseCandidates(array $product, $bg_id) {
+        $candidates = array();
 
-        $option_value_ids = array();
         if (!empty($product['option']) && is_array($product['option'])) {
             foreach ($product['option'] as $opt) {
                 if (!empty($opt['name']) && strtolower(trim((string)$opt['name'])) === 'ship from') {
                     $warehouse = isset($opt['value']) ? trim((string)$opt['value']) : '';
-                }
-                if (!empty($opt['option_value_id'])) {
-                    $option_value_ids[] = (int)$opt['option_value_id'];
+                    if ($warehouse !== '') $candidates[] = $warehouse;
                 }
             }
         }
 
-        if (empty($warehouse)) {
-            $cfg_wh = (string)$this->config->get('module_banggood_import_preferred_warehouse');
-            if ($cfg_wh !== '') $warehouse = trim($cfg_wh);
+        // If Ship From was explicitly selected, respect it only.
+        if (!empty($candidates)) {
+            return array_values(array_unique($candidates));
         }
 
-        if (empty($warehouse)) {
-            try {
-                $q = $this->db->query("SELECT DISTINCT warehouse_key FROM `" . DB_PREFIX . "bg_poa_warehouse_map` WHERE bg_id = '" . $this->db->escape((string)$bg_id) . "' LIMIT 1");
-                if ($q && $q->num_rows) $warehouse = (string)$q->row['warehouse_key'];
-            } catch (Exception $e) {}
+        $cfg_wh = (string)$this->config->get('module_banggood_import_preferred_warehouse');
+        if ($cfg_wh !== '') $candidates[] = trim($cfg_wh);
+
+        try {
+            $q = $this->db->query("SELECT DISTINCT warehouse_key FROM `" . DB_PREFIX . "bg_poa_warehouse_map` WHERE bg_id = '" . $this->db->escape((string)$bg_id) . "'");
+            if ($q && $q->num_rows) {
+                foreach ($q->rows as $r) {
+                    $wk = isset($r['warehouse_key']) ? trim((string)$r['warehouse_key']) : '';
+                    if ($wk !== '') $candidates[] = $wk;
+                }
+            }
+        } catch (Exception $e) {}
+
+        $out = array();
+        foreach ($candidates as $c) {
+            $c = trim($c);
+            if ($c === '') continue;
+            if (!in_array($c, $out, true)) $out[] = $c;
+        }
+        return $out;
+    }
+
+    protected function resolvePoaIdCandidates(array $product, $bg_id) {
+        $candidates = array();
+        $option_value_ids = array();
+        if (!empty($product['option']) && is_array($product['option'])) {
+            foreach ($product['option'] as $opt) {
+                if (!empty($opt['option_value_id'])) {
+                    $option_value_ids[] = (int)$opt['option_value_id'];
+                }
+            }
         }
 
         if (!empty($option_value_ids)) {
@@ -212,23 +244,39 @@ class ModelExtensionShippingBanggood extends Model {
                 $option_key = implode('|', $ids);
                 $qv = $this->db->query("SELECT bg_poa_ids FROM `" . DB_PREFIX . "product_variant` WHERE bg_id = '" . $this->db->escape((string)$bg_id) . "' AND option_key = '" . $this->db->escape($option_key) . "' LIMIT 1");
                 if ($qv && $qv->num_rows && !empty($qv->row['bg_poa_ids'])) {
-                    $poa_id = $this->extractFirstId((string)$qv->row['bg_poa_ids']);
+                    $pid = $this->extractFirstId((string)$qv->row['bg_poa_ids']);
+                    if ($pid !== '') $candidates[] = $pid;
                 }
             } catch (Exception $e) {}
 
             // Fallback: map by option_value_id via bg_poa_map
-            if ($poa_id === '') {
+            if (empty($candidates)) {
                 try {
                     $in = implode(',', array_map('intval', $option_value_ids));
                     $qm = $this->db->query("SELECT poa_id FROM `" . DB_PREFIX . "bg_poa_map` WHERE bg_id = '" . $this->db->escape((string)$bg_id) . "' AND option_value_id IN (" . $in . ") LIMIT 1");
                     if ($qm && $qm->num_rows && !empty($qm->row['poa_id'])) {
-                        $poa_id = (string)$qm->row['poa_id'];
+                        $candidates[] = (string)$qm->row['poa_id'];
                     }
                 } catch (Exception $e) {}
             }
         }
 
-        return array($warehouse, $poa_id);
+        if (empty($candidates)) {
+            try {
+                $qm = $this->db->query("SELECT poa_id FROM `" . DB_PREFIX . "bg_poa_map` WHERE bg_id = '" . $this->db->escape((string)$bg_id) . "' LIMIT 1");
+                if ($qm && $qm->num_rows && !empty($qm->row['poa_id'])) {
+                    $candidates[] = (string)$qm->row['poa_id'];
+                }
+            } catch (Exception $e) {}
+        }
+
+        $out = array();
+        foreach ($candidates as $c) {
+            $c = trim((string)$c);
+            if ($c === '') continue;
+            if (!in_array($c, $out, true)) $out[] = $c;
+        }
+        return $out;
     }
 
     protected function extractFirstId($raw) {
