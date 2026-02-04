@@ -854,12 +854,16 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
 
     /**
      * Mark a persisted fetched product as successfully imported.
+     * Optional $preferredStatus: 'updated' or 'imported' to force final status.
      */
-    public function markFetchedProductImported($bg_product_id) {
+    public function markFetchedProductImported($bg_product_id, $preferredStatus = '') {
         if (empty($bg_product_id)) return;
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
         $now = date('Y-m-d H:i:s');
+
+        $preferredStatus = strtolower(trim((string)$preferredStatus));
+        if ($preferredStatus !== 'updated' && $preferredStatus !== 'imported') $preferredStatus = '';
 
         // If this row was queued as an "updated" item, keep status=updated and stamp updated_at.
         $cur = null;
@@ -871,7 +875,9 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
         $importedCol = $this->getFetchedProductsImportedAtColumnName();
 
-        if ($cur === 'updated') {
+        $finalStatus = $preferredStatus !== '' ? $preferredStatus : ($cur === 'updated' ? 'updated' : 'imported');
+
+        if ($finalStatus === 'updated') {
             $set = array("`status` = 'updated'", "`last_error` = NULL");
             if ($updatedCol) $set[] = "`" . $updatedCol . "` = '" . $this->db->escape($now) . "'";
             $this->db->query("UPDATE `" . $tbl . "` SET " . implode(', ', $set) . " WHERE `bg_product_id` = '" . $this->db->escape((string)$bg_product_id) . "'");
@@ -1008,7 +1014,10 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
 
                     // If this product is present in bg_fetched_products queue, mark it as imported/updated now.
                     // This makes status accurate even when imports happen outside fetchProductsChunk (manual import, update list, etc.).
-                    try { $this->markFetchedProductImported((string)$product_id); } catch (\Throwable $e) {}
+                    try {
+                        $pref = ($updateMode === 'light') ? 'updated' : '';
+                        $this->markFetchedProductImported((string)$product_id, $pref);
+                    } catch (\Throwable $e) {}
                 }
             } catch (Exception $e) {
                 // don't fail the import for stock-status backfill issues

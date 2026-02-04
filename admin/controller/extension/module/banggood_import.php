@@ -448,6 +448,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
         $data['bg_queue_pending'] = 0;
         $data['bg_queue_processing'] = 0;
         $data['bg_queue_imported'] = 0;
+        $data['bg_queue_updated'] = 0;
         $data['bg_queue_error'] = 0;
         // IMPORTANT: compute directly from DB (proxy-safe; exact across oc_bg_fetched_products).
         try {
@@ -458,12 +459,14 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
                     SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                    SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
                     SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error
                     FROM `" . $tbl . "`")->row;
                 if (is_array($st)) {
                     $data['bg_queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
                     $data['bg_queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
                     $data['bg_queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
+                    $data['bg_queue_updated'] = isset($st['updated']) ? (int)$st['updated'] : 0;
                     $data['bg_queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
                 }
             }
@@ -1348,6 +1351,9 @@ HTML;
             if ($limit < 1) $limit = 1;
             if ($limit > 200) $limit = 200;
 
+            $sort = isset($this->request->post['sort']) ? strtolower(trim((string)$this->request->post['sort'])) : 'status';
+            if ($sort !== 'newest') $sort = 'status';
+
             $tbl = $this->getFetchedProductsTableName();
             $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
             if (!$q->num_rows) {
@@ -1394,18 +1400,24 @@ HTML;
             if ($updatedCol) $selectExtra .= ", `" . $updatedCol . "` AS updated_at";
             else $selectExtra .= ", NULL AS updated_at";
 
+            $orderSql = '';
+            if ($sort === 'newest') {
+                $orderSql = "`fetched_at` DESC, `id` DESC";
+            } else {
+                $orderSql = "CASE
+                    WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
+                    WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
+                    WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
+                    WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 3
+                    ELSE 4
+                  END ASC,
+                  `fetched_at` DESC, `id` DESC";
+            }
+
             $qr = $this->db->query(
                 "SELECT `bg_product_id`, `cat_id`, `name`, `img`, `meta_desc`, `fetched_at`, `status`, `attempts`" . $selectExtra . "
                  FROM `" . $tbl . "`
-                 ORDER BY
-                   CASE
-                     WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 0
-                     WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1
-                     WHEN LOWER(TRIM(`status`)) = 'error' THEN 2
-                     WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 3
-                     ELSE 4
-                   END ASC,
-                   `fetched_at` DESC, `id` DESC
+                 ORDER BY " . $orderSql . "
                  LIMIT " . (int)$offset . "," . (int)$limit
             );
             $rows = $qr->rows;
@@ -2378,8 +2390,10 @@ HTML;
                     // Prefer importing by ID; if not available, fall back to URL import using a synthetic URL.
                     $importedOk = false;
                     $lastErr = null;
+                    $rowStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
+                    $updateMode = ($rowStatus === 'updated') ? 'light' : 'full';
                     try {
-                        $this->model_extension_module_banggood_import->importProductById($bgid);
+                        $this->model_extension_module_banggood_import->importProductById($bgid, $updateMode);
                         $importedOk = true;
                     } catch (\Throwable $e1) {
                         $lastErr = $e1;
@@ -2397,7 +2411,10 @@ HTML;
                     }
 
                     // Mark queue row as imported
-                    try { $this->model_extension_module_banggood_import->markFetchedProductImported($bgid); } catch (\Throwable $e) {}
+                    try {
+                        $pref = ($rowStatus === 'updated') ? 'updated' : '';
+                        $this->model_extension_module_banggood_import->markFetchedProductImported($bgid, $pref);
+                    } catch (\Throwable $e) {}
                     $results['success']++;
                 } catch (Exception $e) {
                     try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage()); } catch (\Throwable $x) {}

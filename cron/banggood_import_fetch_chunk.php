@@ -618,7 +618,7 @@ try {
                 }
             }
 
-            try { $bgModel->markFetchedProductImported($pid); } catch (Throwable $e) {}
+            try { $bgModel->markFetchedProductImported($pid, $forceLightUpdate ? 'updated' : ''); } catch (Throwable $e) {}
             $imported++;
 
             // Normalize result reporting across importProductById() and importProductUrl()
