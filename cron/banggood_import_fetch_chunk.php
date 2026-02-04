@@ -539,7 +539,7 @@ try {
     }
 
     // Persist fetched products into bg_fetched_products
-    $persisted = (int)$bgModel->saveFetchedProducts($collected);
+    $persisted = (int)$bgModel->saveFetchedProducts($collected, 'pending');
 
     // Import via queue (preferred):
     // - ensures status/attempts are updated atomically
@@ -552,25 +552,10 @@ try {
     $updated = 0;
     $skipped = 0;
 
-    $rowsToProcess = [];
-    // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
-    // Try the queue claim call first; fall back only if the call actually fails.
-    try {
-        $rowsToProcess = $bgModel->fetchPendingForProcessing($chunkSize);
-    } catch (Throwable $e) {
-        // Fallback: process only the collected list (older installs / queue helper unavailable)
-        foreach ($collected as $p) {
-            $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
-            if ($pid === '') continue;
-            $rowsToProcess[] = ['bg_product_id' => $pid];
-        }
-    }
-
-    $claimed = is_array($rowsToProcess) ? count($rowsToProcess) : 0;
-
-    foreach ($rowsToProcess as $row) {
+    $claimed = 0;
+    $processRow = function(array $row) use ($bgModel, $importMode, $ensureVariants, $verbose, &$imported, &$import_errors, &$firstError, &$created, &$updated, &$skipped) {
         $pid = isset($row['bg_product_id']) ? (string)$row['bg_product_id'] : '';
-        if ($pid === '') continue;
+        if ($pid === '') return;
         try {
             $res = null;
             $usedMode = $importMode;
@@ -579,6 +564,9 @@ try {
             $rowStatus = '';
             if (isset($row['status'])) $rowStatus = strtolower(trim((string)$row['status']));
             $forceLightUpdate = ($rowStatus === 'updated');
+            if (!$forceLightUpdate && method_exists($bgModel, 'productExistsInOpenCart')) {
+                try { $forceLightUpdate = $bgModel->productExistsInOpenCart($pid) ? true : false; } catch (Throwable $e) {}
+            }
 
             // Try to locate a URL in the persisted row (raw_json) when using auto/url.
             $url = '';
@@ -650,6 +638,32 @@ try {
             if ($verbose) {
                 fwrite(STDERR, "ERROR bg_product_id={$pid} " . $e->getMessage() . "\n");
             }
+        }
+    };
+
+    $useFallback = false;
+    // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
+    // Try to claim and process one row at a time so only the active row shows "processing".
+    try {
+        for ($i = 0; $i < $chunkSize; $i++) {
+            $rows = $bgModel->fetchPendingForProcessing(1);
+            if (empty($rows)) break;
+            $claimed += count($rows);
+            foreach ($rows as $row) {
+                $processRow($row);
+            }
+        }
+    } catch (Throwable $e) {
+        $useFallback = true;
+    }
+
+    if ($useFallback) {
+        // Fallback: process only the collected list (older installs / queue helper unavailable)
+        foreach ($collected as $p) {
+            $pid = isset($p['product_id']) ? (string)$p['product_id'] : '';
+            if ($pid === '') continue;
+            $claimed++;
+            $processRow(array('bg_product_id' => $pid));
         }
     }
 

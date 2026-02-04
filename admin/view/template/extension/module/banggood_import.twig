@@ -1298,9 +1298,9 @@ $(document).ready(function() {
   try { $('#bg-queue-sort').val(String(bgQueueSort)); } catch(e) {}
   syncQueuePagerUi(bgQueuePage, 1);
 
-  // Start polling (every 5s). Cheap/no-op when not in persisted mode.
-  bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 5000);
+  // Start polling (every 1s). Cheap/no-op when not in persisted mode.
+  bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 1000);
   // Also do a single refresh shortly after page load.
-  setTimeout(refreshPersistedQueueOnce, 800);
+  setTimeout(refreshPersistedQueueOnce, 500);
 });
 </script>

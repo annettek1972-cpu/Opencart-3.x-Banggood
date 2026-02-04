@@ -2243,7 +2243,7 @@ HTML;
 
             // Persist fetched products into bg_fetched_products (controller-side, guaranteed).
             try {
-                $persisted = (int)$this->saveFetchedProductsController($collected);
+                $persisted = (int)$this->saveFetchedProductsController($collected, 'pending');
             } catch (\Throwable $e) {
                 $json['error'] = 'Failed writing to fetched-products table: ' . $e->getMessage();
                 $this->response->setOutput(json_encode($json));
@@ -2440,93 +2440,102 @@ HTML;
             if ($limit < 1) $limit = 1;
             if ($limit > 10) $limit = 10; // keep web requests short
 
-            // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
-            // Try to claim pending rows via model helper; fall back to direct SQL only if it fails.
-            $rows = array();
-            try {
-                $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing($limit);
-            } catch (\Throwable $e) {
-                // fallback: claim pending rows directly from queue table
-                $tbl = $this->getFetchedProductsTableName();
-                $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
-                if ($q && $q->num_rows) {
-                    $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
-                    $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
-                    $pendingCount = 0;
-                    try {
-                        $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
-                        $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
-                    } catch (\Throwable $e) {
-                        $pendingCount = 0;
-                    }
-
-                    if ($pendingCount > 0) {
-                        $where = $pendingWhere;
-                    } else {
-                        if ($updatedCol) {
-                            $where = "LOWER(TRIM(`status`)) = 'updated' AND (`" . $updatedCol . "` IS NULL OR `" . $updatedCol . "` = '0000-00-00 00:00:00')";
-                        } else {
-                            $where = "LOWER(TRIM(`status`)) = 'updated'";
-                        }
-                    }
-
-                    $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE " . $where . " ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
-                    $rows = $qr ? $qr->rows : array();
-                    if (!empty($rows)) {
-                        $ids = array();
-                        foreach ($rows as $r) if (isset($r['id'])) $ids[] = (int)$r['id'];
-                        if (!empty($ids)) {
-                            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
-                        }
-                    }
-                }
-            }
             $results = array('processed' => 0, 'success' => 0, 'errors' => 0);
 
-            foreach ($rows as $row) {
-                $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
-                if (!$bgid) continue;
+            // OpenCart 3 loads models as Proxy objects; method_exists() is unreliable on Proxy.
+            // Claim and process ONE row at a time so only the active row shows "processing".
+            for ($i = 0; $i < $limit; $i++) {
+                $rows = array();
                 try {
-                    // Prefer importing by ID; if not available, fall back to URL import using a synthetic URL.
-                    $importedOk = false;
-                    $lastErr = null;
-                    $rowStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
-                    $updateMode = ($rowStatus === 'updated') ? 'light' : 'full';
-                    $lastResult = null;
-                    try {
-                        $lastResult = $this->model_extension_module_banggood_import->importProductById($bgid, $updateMode);
-                        $importedOk = true;
-                    } catch (\Throwable $e1) {
-                        $lastErr = $e1;
+                    $rows = $this->model_extension_module_banggood_import->fetchPendingForProcessing(1);
+                } catch (\Throwable $e) {
+                    // fallback: claim pending rows directly from queue table (limit 1)
+                    $tbl = $this->getFetchedProductsTableName();
+                    $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                    if ($q && $q->num_rows) {
+                        $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+                        $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
+                        $pendingCount = 0;
                         try {
-                            $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
-                            $this->model_extension_module_banggood_import->importProductUrl($url);
-                            $importedOk = true;
+                            $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
+                            $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
                         } catch (\Throwable $e2) {
-                            $lastErr = $e2;
+                            $pendingCount = 0;
                         }
-                    }
-                    if (!$importedOk) {
-                        $msg = $lastErr ? $lastErr->getMessage() : 'Import failed';
-                        throw new \Exception('Import failed: ' . $msg);
-                    }
 
-                    // Mark queue row as imported
-                    try {
-                        $pref = '';
-                        if (is_array($lastResult) && isset($lastResult['result']) && $lastResult['result'] === 'updated') {
-                            $pref = 'updated';
-                        } elseif ($rowStatus === 'updated') {
-                            $pref = 'updated';
+                        if ($pendingCount > 0) {
+                            $where = $pendingWhere;
+                        } else {
+                            if ($updatedCol) {
+                                $where = "LOWER(TRIM(`status`)) = 'updated' AND (`" . $updatedCol . "` IS NULL OR `" . $updatedCol . "` = '0000-00-00 00:00:00')";
+                            } else {
+                                $where = "LOWER(TRIM(`status`)) = 'updated'";
+                            }
                         }
-                        $this->model_extension_module_banggood_import->markFetchedProductImported($bgid, $pref);
-                    } catch (\Throwable $e) {}
-                    $results['success']++;
-                } catch (Exception $e) {
-                    try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage()); } catch (\Throwable $x) {}
-                    $results['errors']++;
+
+                        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE " . $where . " ORDER BY `fetched_at` ASC, `id` ASC LIMIT 1");
+                        $rows = $qr ? $qr->rows : array();
+                        if (!empty($rows)) {
+                            $ids = array();
+                            foreach ($rows as $r) if (isset($r['id'])) $ids[] = (int)$r['id'];
+                            if (!empty($ids)) {
+                                $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+                            }
+                        }
+                    }
                 }
-                $results['processed']++;
+
+                if (empty($rows)) break;
+
+                foreach ($rows as $row) {
+                    $bgid = isset($row['bg_product_id']) ? $row['bg_product_id'] : '';
+                    if (!$bgid) continue;
+                    try {
+                        // Prefer importing by ID; if not available, fall back to URL import using a synthetic URL.
+                        $importedOk = false;
+                        $lastErr = null;
+                        $rowStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
+                        $forceLightUpdate = ($rowStatus === 'updated');
+                        if (!$forceLightUpdate && method_exists($this->model_extension_module_banggood_import, 'productExistsInOpenCart')) {
+                            try { $forceLightUpdate = $this->model_extension_module_banggood_import->productExistsInOpenCart($bgid) ? true : false; } catch (\Throwable $e3) {}
+                        }
+                        $updateMode = $forceLightUpdate ? 'light' : 'full';
+                        $lastResult = null;
+                        try {
+                            $lastResult = $this->model_extension_module_banggood_import->importProductById($bgid, $updateMode);
+                            $importedOk = true;
+                        } catch (\Throwable $e1) {
+                            $lastErr = $e1;
+                            try {
+                                $url = 'https://www.banggood.com/item/' . rawurlencode((string)$bgid) . '.html';
+                                $this->model_extension_module_banggood_import->importProductUrl($url);
+                                $importedOk = true;
+                            } catch (\Throwable $e2) {
+                                $lastErr = $e2;
+                            }
+                        }
+                        if (!$importedOk) {
+                            $msg = $lastErr ? $lastErr->getMessage() : 'Import failed';
+                            throw new \Exception('Import failed: ' . $msg);
+                        }
+
+                        // Mark queue row as imported
+                        try {
+                            $pref = '';
+                            if (is_array($lastResult) && isset($lastResult['result']) && $lastResult['result'] === 'updated') {
+                                $pref = 'updated';
+                            } elseif ($forceLightUpdate) {
+                                $pref = 'updated';
+                            }
+                            $this->model_extension_module_banggood_import->markFetchedProductImported($bgid, $pref);
+                        } catch (\Throwable $e4) {}
+                        $results['success']++;
+                    } catch (Exception $e) {
+                        try { $this->model_extension_module_banggood_import->markFetchedProductError($bgid, $e->getMessage()); } catch (\Throwable $x) {}
+                        $results['errors']++;
+                    }
+                    $results['processed']++;
+                }
             }
 
             try { @ob_end_clean(); } catch (\Throwable $e) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $x) {} }

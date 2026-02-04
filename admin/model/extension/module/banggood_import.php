@@ -764,12 +764,14 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
      * Each product array should contain at least 'product_id' and optionally other fields.
      * Returns number of rows processed (attempted inserts/updates).
      */
-    public function saveFetchedProducts(array $products) {
+    public function saveFetchedProducts(array $products, $statusMode = 'auto') {
         if (empty($products)) return 0;
         $this->ensureFetchedProductsTableExists();
         $tbl = $this->getFetchedProductsTableName();
         $now = date('Y-m-d H:i:s');
         $count = 0;
+        $statusMode = strtolower(trim((string)$statusMode));
+        if ($statusMode === '') $statusMode = 'auto';
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
         $importedCol = $this->getFetchedProductsImportedAtColumnName();
         $ocCache = array();
@@ -785,18 +787,22 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
             // Use JSON_UNESCAPED_UNICODE to keep readable stored JSON; escape for DB
             $rawJson = $this->db->escape(json_encode($p, JSON_UNESCAPED_UNICODE));
 
-            // Determine whether this product already exists in OpenCart.
-            if (array_key_exists($bgidRaw, $ocCache)) {
-                $existsInOc = (bool)$ocCache[$bgidRaw];
-            } else {
-                $existsInOc = $this->findExistingProductByBanggoodId($bgidRaw) ? true : false;
-                $ocCache[$bgidRaw] = $existsInOc;
+            $status = 'pending';
+            if ($statusMode === 'auto') {
+                // Determine whether this product already exists in OpenCart.
+                if (array_key_exists($bgidRaw, $ocCache)) {
+                    $existsInOc = (bool)$ocCache[$bgidRaw];
+                } else {
+                    $existsInOc = $this->findExistingProductByBanggoodId($bgidRaw) ? true : false;
+                    $ocCache[$bgidRaw] = $existsInOc;
+                }
+                // Status policy:
+                // - if in OpenCart already -> mark as updated (price/options/images refresh)
+                // - otherwise -> pending (import as normal)
+                $status = $existsInOc ? 'updated' : 'pending';
+            } elseif (in_array($statusMode, array('pending','updated','imported','processing','error'), true)) {
+                $status = $statusMode;
             }
-
-            // Status policy:
-            // - if in OpenCart already -> mark as updated (price/options/images refresh)
-            // - otherwise -> pending (import as normal)
-            $status = $existsInOc ? 'updated' : 'pending';
             $statusEsc = $this->db->escape($status);
 
             $statusUpdates = array(
