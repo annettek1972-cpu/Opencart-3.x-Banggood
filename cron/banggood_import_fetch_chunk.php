@@ -618,9 +618,6 @@ try {
                 }
             }
 
-            try { $bgModel->markFetchedProductImported($pid, $forceLightUpdate ? 'updated' : ''); } catch (Throwable $e) {}
-            $imported++;
-
             // Normalize result reporting across importProductById() and importProductUrl()
             $r = '';
             if (is_array($res) && isset($res['result'])) {
@@ -632,6 +629,11 @@ try {
                 elseif ($u) $r = 'updated';
                 else $r = 'skip';
             }
+
+            $pref = ($r === 'updated') ? 'updated' : '';
+            if ($pref === '' && $forceLightUpdate) $pref = 'updated';
+            try { $bgModel->markFetchedProductImported($pid, $pref); } catch (Throwable $e) {}
+            $imported++;
 
             if ($r === 'created') $created++;
             elseif ($r === 'updated') $updated++;

@@ -115,16 +115,40 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
     }
 
     /**
-     * Prefer oc_bg_fetched_products if it exists (matches phpMyAdmin expectation),
-     * otherwise use DB_PREFIX . bg_fetched_products.
+     * Choose fetched-products table name.
+     * Prefer the DB_PREFIX table when it exists; if both exist, choose the one with more rows.
      */
     protected function getFetchedProductsTableName() {
-        $preferred = 'oc_bg_fetched_products';
+        $primary = DB_PREFIX . 'bg_fetched_products';
+        $alt = 'oc_bg_fetched_products';
+        $primaryExists = false;
+        $altExists = false;
         try {
-            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($preferred) . "'");
-            if ($q && $q->num_rows) return $preferred;
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($primary) . "'");
+            if ($q && $q->num_rows) $primaryExists = true;
         } catch (\Throwable $e) {}
-        return DB_PREFIX . 'bg_fetched_products';
+        try {
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($alt) . "'");
+            if ($q && $q->num_rows) $altExists = true;
+        } catch (\Throwable $e) {}
+
+        if ($primaryExists && $altExists) {
+            $pCnt = 0;
+            $aCnt = 0;
+            try {
+                $row = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $primary . "`")->row;
+                $pCnt = isset($row['cnt']) ? (int)$row['cnt'] : 0;
+            } catch (\Throwable $e) {}
+            try {
+                $row = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $alt . "`")->row;
+                $aCnt = isset($row['cnt']) ? (int)$row['cnt'] : 0;
+            } catch (\Throwable $e) {}
+            if ($aCnt > $pCnt) return $alt;
+            return $primary;
+        }
+        if ($primaryExists) return $primary;
+        if ($altExists) return $alt;
+        return $primary;
     }
 
     /**
@@ -189,26 +213,67 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
      * Controller-side upsert into bg_fetched_products (guarantees table write happens here).
      * Returns number of rows attempted.
      */
-    protected function saveFetchedProductsController(array $products, $status = 'pending') {
+    protected function saveFetchedProductsController(array $products, $status = 'auto') {
         if (empty($products)) return 0;
+        // Ensure model is available for product existence checks
+        try { $this->load->model('extension/module/banggood_import'); } catch (\Throwable $e) {}
         $this->ensureFetchedProductsTableExistsController();
         $tbl = $this->getFetchedProductsTableName();
         $now = date('Y-m-d H:i:s');
         $count = 0;
-        $status = $status ? (string)$status : 'pending';
+        $status = $status ? (string)$status : 'auto';
+        $status = strtolower(trim($status));
+        $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+        $importedCol = $this->getFetchedProductsImportedAtColumnNameController();
+        $ocCache = array();
 
         foreach ($products as $p) {
             if (!is_array($p) || empty($p['product_id'])) continue;
-            $bgid = $this->db->escape((string)$p['product_id']);
+            $bgidRaw = (string)$p['product_id'];
+            $bgid = $this->db->escape($bgidRaw);
             $cat = isset($p['cat_id']) ? $this->db->escape((string)$p['cat_id']) : '';
             $name = isset($p['product_name']) ? $this->db->escape((string)$p['product_name']) : (isset($p['name']) ? $this->db->escape((string)$p['name']) : '');
             $img = isset($p['img']) ? $this->db->escape((string)$p['img']) : '';
             $meta = isset($p['meta_desc']) ? $this->db->escape((string)$p['meta_desc']) : '';
             $rawJson = $this->db->escape(json_encode($p, JSON_UNESCAPED_UNICODE));
 
+            // Determine status for this row
+            $rowStatus = $status;
+            if ($rowStatus === 'auto') {
+                $existsInOc = false;
+                if (array_key_exists($bgidRaw, $ocCache)) {
+                    $existsInOc = (bool)$ocCache[$bgidRaw];
+                } else {
+                    try {
+                        if (isset($this->model_extension_module_banggood_import) &&
+                            method_exists($this->model_extension_module_banggood_import, 'productExistsInOpenCart')) {
+                            $existsInOc = $this->model_extension_module_banggood_import->productExistsInOpenCart($bgidRaw) ? true : false;
+                        }
+                    } catch (\Throwable $e) {}
+                    $ocCache[$bgidRaw] = $existsInOc;
+                }
+                $rowStatus = $existsInOc ? 'updated' : 'pending';
+            }
+            if ($rowStatus !== 'updated' && $rowStatus !== 'imported' && $rowStatus !== 'processing' && $rowStatus !== 'error') {
+                $rowStatus = 'pending';
+            }
+
+            $statusEsc = $this->db->escape($rowStatus);
+            $statusUpdates = array(
+                "`status` = '" . $statusEsc . "'",
+                "`last_error` = NULL",
+                "`attempts` = 0"
+            );
+            if ($rowStatus === 'updated' && $updatedCol) {
+                $statusUpdates[] = "`" . $updatedCol . "` = NULL";
+            }
+            if ($rowStatus === 'pending' && $importedCol) {
+                $statusUpdates[] = "`" . $importedCol . "` = NULL";
+            }
+
             $sql = "INSERT INTO `" . $tbl . "`
                 (`bg_product_id`,`cat_id`,`name`,`img`,`meta_desc`,`raw_json`,`fetched_at`,`status`)
-                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "','" . $this->db->escape($status) . "')
+                VALUES ('" . $bgid . "','" . $cat . "','" . $name . "','" . $img . "','" . $meta . "','" . $rawJson . "','" . $this->db->escape($now) . "','" . $statusEsc . "')
                 ON DUPLICATE KEY UPDATE
                   `cat_id` = VALUES(`cat_id`),
                   `name` = VALUES(`name`),
@@ -216,7 +281,7 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
                   `meta_desc` = VALUES(`meta_desc`),
                   `raw_json` = VALUES(`raw_json`),
                   `fetched_at` = VALUES(`fetched_at`),
-                  `status` = IF(`status` = 'imported', `status`, VALUES(`status`))";
+                  " . implode(', ', $statusUpdates);
             $this->db->query($sql);
             $count++;
         }
@@ -1534,7 +1599,8 @@ HTML;
             // This ensures manual imports (from "Fetch Updates" list) don't remain stuck as "pending".
             try {
                 if (method_exists($this->model_extension_module_banggood_import, 'markFetchedProductImported')) {
-                    $this->model_extension_module_banggood_import->markFetchedProductImported($product_id);
+                    $pref = ($result === 'updated') ? 'updated' : '';
+                    $this->model_extension_module_banggood_import->markFetchedProductImported($product_id, $pref);
                 }
             } catch (\Throwable $e) {
                 // non-fatal
@@ -2392,8 +2458,9 @@ HTML;
                     $lastErr = null;
                     $rowStatus = isset($row['status']) ? strtolower(trim((string)$row['status'])) : '';
                     $updateMode = ($rowStatus === 'updated') ? 'light' : 'full';
+                    $lastResult = null;
                     try {
-                        $this->model_extension_module_banggood_import->importProductById($bgid, $updateMode);
+                        $lastResult = $this->model_extension_module_banggood_import->importProductById($bgid, $updateMode);
                         $importedOk = true;
                     } catch (\Throwable $e1) {
                         $lastErr = $e1;
@@ -2412,7 +2479,12 @@ HTML;
 
                     // Mark queue row as imported
                     try {
-                        $pref = ($rowStatus === 'updated') ? 'updated' : '';
+                        $pref = '';
+                        if (is_array($lastResult) && isset($lastResult['result']) && $lastResult['result'] === 'updated') {
+                            $pref = 'updated';
+                        } elseif ($rowStatus === 'updated') {
+                            $pref = 'updated';
+                        }
                         $this->model_extension_module_banggood_import->markFetchedProductImported($bgid, $pref);
                     } catch (\Throwable $e) {}
                     $results['success']++;

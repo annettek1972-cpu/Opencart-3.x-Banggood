@@ -723,16 +723,40 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
     }
 
     /**
-     * Prefer oc_bg_fetched_products if it exists (matches phpMyAdmin expectation),
-     * otherwise use DB_PREFIX . bg_fetched_products.
+     * Choose fetched-products table name.
+     * Prefer the DB_PREFIX table when it exists; if both exist, choose the one with more rows.
      */
     protected function getFetchedProductsTableName() {
-        $preferred = 'oc_bg_fetched_products';
+        $primary = DB_PREFIX . "bg_fetched_products";
+        $alt = "oc_bg_fetched_products";
+        $primaryExists = false;
+        $altExists = false;
         try {
-            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($preferred) . "'");
-            if ($q && $q->num_rows) return $preferred;
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($primary) . "'");
+            if ($q && $q->num_rows) $primaryExists = true;
         } catch (\Throwable $e) {}
-        return DB_PREFIX . "bg_fetched_products";
+        try {
+            $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($alt) . "'");
+            if ($q && $q->num_rows) $altExists = true;
+        } catch (\Throwable $e) {}
+
+        if ($primaryExists && $altExists) {
+            $pCnt = 0;
+            $aCnt = 0;
+            try {
+                $row = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $primary . "`")->row;
+                $pCnt = isset($row['cnt']) ? (int)$row['cnt'] : 0;
+            } catch (\Throwable $e) {}
+            try {
+                $row = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $alt . "`")->row;
+                $aCnt = isset($row['cnt']) ? (int)$row['cnt'] : 0;
+            } catch (\Throwable $e) {}
+            if ($aCnt > $pCnt) return $alt;
+            return $primary;
+        }
+        if ($primaryExists) return $primary;
+        if ($altExists) return $alt;
+        return $primary;
     }
 
     /**
@@ -1015,7 +1039,7 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
                     // If this product is present in bg_fetched_products queue, mark it as imported/updated now.
                     // This makes status accurate even when imports happen outside fetchProductsChunk (manual import, update list, etc.).
                     try {
-                        $pref = ($updateMode === 'light') ? 'updated' : '';
+                        $pref = ($result === 'updated') ? 'updated' : '';
                         $this->markFetchedProductImported((string)$product_id, $pref);
                     } catch (\Throwable $e) {}
                 }
@@ -2660,6 +2684,14 @@ protected function apiRequestRawSimple($url) {
         );
         if ($query->num_rows) return (int)$query->row['product_id'];
         return 0;
+    }
+
+    /**
+     * Public helper: does this Banggood product already exist in OpenCart?
+     * Returns true if a matching product_id is found.
+     */
+    public function productExistsInOpenCart($bg_id) {
+        return $this->findExistingProductByBanggoodId($bg_id) ? true : false;
     }
 
    protected function createNewProduct($normalized) {

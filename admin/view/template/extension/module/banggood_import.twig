@@ -439,6 +439,8 @@ var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'oth
 var bgQueuePage = 1;
 var bgQueueLimit = 50;
 var bgQueueSort = 'status';
+// Skip in-browser queue processing to avoid timeouts; use cron instead.
+var bgFetchOnly = true;
 
 // Bind import-by-id buttons inside a container
 function bindImportButtons($container) {
@@ -948,6 +950,41 @@ $('#btn-fetch-chunk').on('click', function(e){
     $btn.html('<i class="fa fa-download"></i> Fetch');
   }
 
+  function fetchChunkOnly() {
+    $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
+    $.ajax({
+      url: fetchChunkUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { chunk_size: count },
+      success: function(json) {
+        if (json.error) {
+          $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
+          return;
+        }
+        if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
+          var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
+          if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
+          if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
+            msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
+          }
+          if (json.finished) msg += ' • End of list';
+          $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
+        }
+        if (json.html) $panel.append(json.html);
+
+        // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
+        try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
+      },
+      error: function(xhr, status, err) {
+        $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
+      },
+      complete: function() {
+        finish();
+      }
+    });
+  }
+
   function drainQueueOnce() {
     $.ajax({
       url: processFetchedUrl,
@@ -1030,68 +1067,13 @@ $('#btn-fetch-chunk').on('click', function(e){
     });
   }
 
+  if (bgFetchOnly) {
+    fetchChunkOnly();
+    return;
+  }
+
   drainQueueOnce();
   return;
-
-  $.ajax({
-    url: fetchChunkUrl,
-    type: 'post',
-    dataType: 'json',
-    data: {
-      chunk_size: count
-    },
-    success: function(json) {
-      if (json.error) {
-        $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
-        return;
-      }
-      if (json.finished) {
-        // continue, we still render the DB list below
-      }
-      if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {
-        var msg = 'Imported: ' + (json.imported || 0) + ' • Errors: ' + (json.import_errors || 0);
-        if (json.persisted_tbl) msg += ' • Queue: ' + (json.persisted_tbl) + ' (wrote ' + (json.persisted || 0) + ')';
-        if (json.persist_check && typeof json.persist_check.expected !== 'undefined') {
-          msg += ' • Verified: ' + (json.persist_check.found || 0) + '/' + (json.persist_check.expected || 0);
-        }
-        if (json.finished) msg += ' • End of list';
-        // Replace panel with status + DB-backed list HTML
-        $panel.html('<div class="alert alert-success" style="margin-bottom:10px;">' + msg + '</div>');
-      }
-      if (json.html) $panel.append(json.html);
-
-      // Immediately import 1 queued item after fetch so products actually get inserted without long timeouts.
-      // IMPORTANT: trigger even if persisted=0 (common when the fetched IDs were already queued as pending).
-      $.ajax({
-        url: processFetchedUrl,
-        type: 'post',
-        dataType: 'json',
-        data: { limit: 1 },
-        success: function(pjson) {
-          if (pjson && pjson.error) {
-            var extra = '';
-            try {
-              if (pjson.fatal_file) extra += '<div style="margin-top:6px;font-size:12px;white-space:pre-wrap;">File: ' + $('<div/>').text(pjson.fatal_file).html() + ':' + (pjson.fatal_line || '') + '</div>';
-            } catch(e) {}
-            $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + extra + '</div>');
-            return;
-          }
-          // Let the existing queue auto-refresh update statuses; also do a quick one-shot refresh.
-          try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
-        },
-        error: function(xhr, status, err) {
-          $panel.prepend('<div class="alert alert-danger">Import AJAX error: ' + (err || status) + '</div>');
-        }
-      });
-    },
-    error: function(xhr, status, err) {
-      $panel.html('<div class="alert alert-danger">AJAX error: '+err+'</div>');
-    },
-    complete: function() {
-      $btn.prop('disabled', false);
-      $btn.html('<i class="fa fa-download"></i> Fetch');
-    }
-  });
 });
 
 // Fetch updates (GetProductUpdateList)
