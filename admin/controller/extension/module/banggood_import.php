@@ -2450,12 +2450,34 @@ HTML;
                 $tbl = $this->getFetchedProductsTableName();
                 $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
                 if ($q && $q->num_rows) {
-                    $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE `status` = 'pending' ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
+                    $updatedCol = $this->getFetchedProductsUpdatedAtColumnNameController();
+                    $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
+                    $pendingCount = 0;
+                    try {
+                        $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
+                        $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
+                    } catch (\Throwable $e) {
+                        $pendingCount = 0;
+                    }
+
+                    if ($pendingCount > 0) {
+                        $where = $pendingWhere;
+                    } else {
+                        if ($updatedCol) {
+                            $where = "LOWER(TRIM(`status`)) = 'updated' AND (`" . $updatedCol . "` IS NULL OR `" . $updatedCol . "` = '0000-00-00 00:00:00')";
+                        } else {
+                            $where = "LOWER(TRIM(`status`)) = 'updated'";
+                        }
+                    }
+
+                    $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE " . $where . " ORDER BY `fetched_at` ASC, `id` ASC LIMIT " . (int)$limit);
                     $rows = $qr ? $qr->rows : array();
                     if (!empty($rows)) {
                         $ids = array();
                         foreach ($rows as $r) if (isset($r['id'])) $ids[] = (int)$r['id'];
-                        if (!empty($ids)) $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+                        if (!empty($ids)) {
+                            $this->db->query("UPDATE `" . $tbl . "` SET `status` = 'processing', `attempts` = `attempts` + 1 WHERE `id` IN (" . implode(',', $ids) . ")");
+                        }
                     }
                 }
             }

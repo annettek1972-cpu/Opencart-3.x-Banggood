@@ -857,20 +857,21 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         // - Otherwise, process updated where updated_at is NULL (if column exists).
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
         $pendingCount = 0;
+        $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
         try {
-            $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE `status` = 'pending'")->row;
+            $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
             $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
         } catch (\Throwable $e) {
             $pendingCount = 0;
         }
 
         if ($pendingCount > 0) {
-            $where = "`status` = 'pending'";
+            $where = $pendingWhere;
         } else {
             if ($updatedCol) {
-                $where = "`status` = 'updated' AND `" . $updatedCol . "` IS NULL";
+                $where = "LOWER(TRIM(`status`)) = 'updated' AND (`" . $updatedCol . "` IS NULL OR `" . $updatedCol . "` = '0000-00-00 00:00:00')";
             } else {
-                $where = "`status` = 'updated'";
+                $where = "LOWER(TRIM(`status`)) = 'updated'";
             }
         }
 
