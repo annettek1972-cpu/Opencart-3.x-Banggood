@@ -2210,43 +2210,8 @@ protected function apiRequestRawSimple($url) {
        Debug logger (tries multiple locations then error_log)
        ------------------------- */
     protected function writeDebugLog($bg_id, array $diagnostics) {
-        $filename = 'banggood_import_debug_' . preg_replace('/[^0-9A-Za-z_.-]/', '_', $bg_id) . '.log';
-        $entry = array('ts' => date('c'), 'diagnostics' => $diagnostics);
-        $json = json_encode($entry, JSON_PRETTY_PRINT) . PHP_EOL;
-        $candidates = array();
-
-        if (defined('DIR_STORAGE') && DIR_STORAGE) $candidates[] = rtrim(DIR_STORAGE, '/\\') . DIRECTORY_SEPARATOR . $filename;
-        if (defined('DIR_APPLICATION') && DIR_APPLICATION) $candidates[] = rtrim(DIR_APPLICATION, '/\\') . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        if (defined('DIR_SYSTEM') && DIR_SYSTEM) {
-            $candidates[] = rtrim(DIR_SYSTEM, '/\\') . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-            $candidates[] = rtrim(DIR_SYSTEM, '/\\') . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        }
-        if (isset($_SERVER['DOCUMENT_ROOT']) && $_SERVER['DOCUMENT_ROOT']) {
-            $candidates[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\') . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-            $candidates[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\') . DIRECTORY_SEPARATOR . 'system' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . $filename;
-        }
-        $tmp = sys_get_temp_dir();
-        if ($tmp) $candidates[] = rtrim($tmp, '/\\') . DIRECTORY_SEPARATOR . $filename;
-
-        $written = false;
-        foreach ($candidates as $path) {
-            $path = str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $path);
-            $dir = dirname($path);
-            if (!is_dir($dir)) @mkdir($dir, 0777, true);
-            $res = @file_put_contents($path, $json, FILE_APPEND | LOCK_EX);
-            if ($res !== false) {
-                $diagnostics['_written_to'] = $path;
-                $written = true;
-                break;
-            }
-        }
-
-        if (!$written) {
-            @error_log("BANGGOOD-IMPORT-LOG: Could not write debug file. Diagnostics: " . json_encode($diagnostics));
-            @error_log("BANGGOOD-IMPORT-LOG-CONTENT: " . (is_string($json) ? substr($json, 0, 1000) : ''));
-        } else {
-            @error_log("BANGGOOD-IMPORT-LOG: wrote debug for bg_id={$bg_id} to " . $diagnostics['_written_to']);
-        }
+        // Debug logging disabled.
+        return;
     }
 
     /* -------------------------
