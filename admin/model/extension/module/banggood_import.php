@@ -853,14 +853,25 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
         }
 
         // Select rows needing processing:
-        // - pending
-        // - updated where updated_at is NULL (if column exists), otherwise include updated too.
+        // - If any pending exists, process ONLY pending first.
+        // - Otherwise, process updated where updated_at is NULL (if column exists).
         $updatedCol = $this->getFetchedProductsUpdatedAtColumnName();
-        $where = "`status` = 'pending'";
-        if ($updatedCol) {
-            $where .= " OR (`status` = 'updated' AND `" . $updatedCol . "` IS NULL)";
+        $pendingCount = 0;
+        try {
+            $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE `status` = 'pending'")->row;
+            $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
+        } catch (\Throwable $e) {
+            $pendingCount = 0;
+        }
+
+        if ($pendingCount > 0) {
+            $where = "`status` = 'pending'";
         } else {
-            $where .= " OR `status` = 'updated'";
+            if ($updatedCol) {
+                $where = "`status` = 'updated' AND `" . $updatedCol . "` IS NULL";
+            } else {
+                $where = "`status` = 'updated'";
+            }
         }
 
         $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE (" . $where . ") ORDER BY
