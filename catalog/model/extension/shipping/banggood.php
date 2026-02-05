@@ -66,21 +66,19 @@ class ModelExtensionShippingBanggood extends Model {
                         try {
                             $resp = $this->getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays);
                             $countryUsed = $country;
-                            $shipment_list = array();
-                            if (!empty($resp['shipment_list']) && is_array($resp['shipment_list'])) {
-                                $shipment_list = $resp['shipment_list'];
-                            } elseif (!empty($resp['data']['shipment_list']) && is_array($resp['data']['shipment_list'])) {
-                                $shipment_list = $resp['data']['shipment_list'];
-                            }
+                            $shipment_list = $this->extractShipmentList($resp);
                             if (empty($shipment_list)) continue;
 
                             foreach ($shipment_list as $s) {
                                 $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
-                                if ($best === null || $fee < $best['fee']) {
+                            if ($best === null || $fee < $best['fee']) {
                                     $best = array(
                                         'fee' => $fee,
-                                        'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping'),
-                                        'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code'] : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
+                                    'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                        : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
+                                        : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping')),
+                                    'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
+                                        : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
                                         'warehouse' => $warehouse
                                     );
                                 }
@@ -351,6 +349,20 @@ class ModelExtensionShippingBanggood extends Model {
         if ($raw === null) return 0.0;
         $num = (float)str_replace(',', '', preg_replace('/[^\d\.\-]/', '', (string)$raw));
         return $num;
+    }
+
+    protected function extractShipmentList($resp) {
+        if (!is_array($resp)) return array();
+        $keys = array('shipment_list', 'shipments', 'shipping_list', 'shipmethod_list');
+        foreach ($keys as $k) {
+            if (!empty($resp[$k]) && is_array($resp[$k])) return $resp[$k];
+        }
+        if (!empty($resp['data']) && is_array($resp['data'])) {
+            foreach ($keys as $k) {
+                if (!empty($resp['data'][$k]) && is_array($resp['data'][$k])) return $resp['data'][$k];
+            }
+        }
+        return array();
     }
 
     protected function getProductInfoCached($bg_id, $config) {
