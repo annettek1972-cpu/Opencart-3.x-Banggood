@@ -54,6 +54,87 @@
         </form>
       </div>
     </div>
+
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title"><i class="fa fa-flask"></i> {{ text_test_shipments }}</h3>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-sm-4">
+            <div class="form-group">
+              <label class="control-label" for="bg-test-product-id">{{ entry_test_product_id }}</label>
+              <input type="text" id="bg-test-product-id" class="form-control" placeholder="1812604" />
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="form-group">
+              <label class="control-label" for="bg-test-country">{{ entry_test_country }}</label>
+              <input type="text" id="bg-test-country" class="form-control" placeholder="Australia / AU" />
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="form-group">
+              <label class="control-label" for="bg-test-warehouse">{{ entry_test_warehouse }}</label>
+              <input type="text" id="bg-test-warehouse" class="form-control" placeholder="CN / US" />
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-sm-4">
+            <div class="form-group">
+              <label class="control-label" for="bg-test-poa">{{ entry_test_poa_id }}</label>
+              <input type="text" id="bg-test-poa" class="form-control" placeholder="optional" />
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <div class="form-group">
+              <label class="control-label" for="bg-test-qty">{{ entry_test_quantity }}</label>
+              <input type="number" min="1" id="bg-test-qty" class="form-control" value="1" />
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <label class="control-label">&nbsp;</label>
+            <div>
+              <button type="button" id="bg-test-shipments" class="btn btn-primary">{{ button_test_shipments }}</button>
+            </div>
+          </div>
+        </div>
+        <pre id="bg-test-output" style="margin-top:12px;display:none;max-height:300px;overflow:auto;"></pre>
+      </div>
+    </div>
   </div>
 </div>
 {{ footer }}
+
+<script type="text/javascript">
+$('#bg-test-shipments').on('click', function() {
+  var $btn = $(this);
+  var $out = $('#bg-test-output');
+  $out.hide().text('');
+  $btn.prop('disabled', true);
+  $.ajax({
+    url: '{{ test_shipments_url|raw }}',
+    type: 'post',
+    dataType: 'json',
+    data: {
+      product_id: $('#bg-test-product-id').val(),
+      country: $('#bg-test-country').val(),
+      warehouse: $('#bg-test-warehouse').val(),
+      poa_id: $('#bg-test-poa').val(),
+      quantity: $('#bg-test-qty').val()
+    },
+    success: function(json) {
+      var text = JSON.stringify(json, null, 2);
+      $out.text(text).show();
+    },
+    error: function(xhr) {
+      var msg = xhr && xhr.responseText ? xhr.responseText : 'Request failed';
+      $out.text(msg).show();
+    },
+    complete: function() {
+      $btn.prop('disabled', false);
+    }
+  });
+});
+</script>

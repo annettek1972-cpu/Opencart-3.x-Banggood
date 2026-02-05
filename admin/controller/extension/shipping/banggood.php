@@ -7,6 +7,8 @@ class ControllerExtensionShippingBanggood extends Controller {
         $this->document->setTitle($this->language->get('heading_title'));
 
         $this->load->model('setting/setting');
+        $data['user_token'] = $this->session->data['user_token'];
+        $data['test_shipments_url'] = $this->url->link('extension/shipping/banggood/testShipments', 'user_token=' . $this->session->data['user_token'], true);
 
         if (($this->request->server['REQUEST_METHOD'] == 'POST') && $this->validate()) {
             $this->model_setting_setting->editSetting('shipping_banggood', $this->request->post);
@@ -24,6 +26,13 @@ class ControllerExtensionShippingBanggood extends Controller {
         $data['entry_sort_order'] = $this->language->get('entry_sort_order');
         $data['entry_cache_days'] = $this->language->get('entry_cache_days');
         $data['help_cache_days'] = $this->language->get('help_cache_days');
+        $data['text_test_shipments'] = $this->language->get('text_test_shipments');
+        $data['entry_test_product_id'] = $this->language->get('entry_test_product_id');
+        $data['entry_test_country'] = $this->language->get('entry_test_country');
+        $data['entry_test_warehouse'] = $this->language->get('entry_test_warehouse');
+        $data['entry_test_poa_id'] = $this->language->get('entry_test_poa_id');
+        $data['entry_test_quantity'] = $this->language->get('entry_test_quantity');
+        $data['button_test_shipments'] = $this->language->get('button_test_shipments');
 
         $data['error_warning'] = isset($this->error['warning']) ? $this->error['warning'] : '';
 
@@ -61,6 +70,37 @@ class ControllerExtensionShippingBanggood extends Controller {
         $data['footer'] = $this->load->controller('common/footer');
 
         $this->response->setOutput($this->load->view('extension/shipping/banggood', $data));
+    }
+
+    public function testShipments() {
+        $this->load->language('extension/shipping/banggood');
+        $this->response->addHeader('Content-Type: application/json');
+
+        $json = array();
+        if (!$this->user->hasPermission('modify', 'extension/shipping/banggood')) {
+            $json['error'] = $this->language->get('error_permission');
+            $this->response->setOutput(json_encode($json));
+            return;
+        }
+
+        try {
+            $this->load->model('extension/shipping/banggood');
+            $params = array(
+                'product_id' => isset($this->request->post['product_id']) ? $this->request->post['product_id'] : '',
+                'warehouse' => isset($this->request->post['warehouse']) ? $this->request->post['warehouse'] : '',
+                'country' => isset($this->request->post['country']) ? $this->request->post['country'] : '',
+                'poa_id' => isset($this->request->post['poa_id']) ? $this->request->post['poa_id'] : '',
+                'quantity' => isset($this->request->post['quantity']) ? $this->request->post['quantity'] : 1
+            );
+
+            $res = $this->model_extension_shipping_banggood->testShipments($params);
+            $json['success'] = true;
+            $json['data'] = $res;
+        } catch (Exception $e) {
+            $json['error'] = $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
     }
 
     protected function validate() {
