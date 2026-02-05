@@ -216,19 +216,17 @@ class ModelExtensionShippingBanggood extends Model {
     protected function resolveWarehouseCandidates(array $product, $bg_id, $config) {
         $candidates = array();
 
+        $selected = array();
         if (!empty($product['option']) && is_array($product['option'])) {
             foreach ($product['option'] as $opt) {
                 if (!empty($opt['name']) && strtolower(trim((string)$opt['name'])) === 'ship from') {
                     $warehouse = isset($opt['value']) ? trim((string)$opt['value']) : '';
-                    if ($warehouse !== '') $candidates[] = $warehouse;
+                    if ($warehouse !== '') $selected[] = $warehouse;
                 }
             }
         }
 
-        // If Ship From was explicitly selected, respect it only.
-        if (!empty($candidates)) {
-            return array_values(array_unique($candidates));
-        }
+        foreach ($selected as $s) $candidates[] = $s;
 
         $cfg_wh = (string)$this->config->get('module_banggood_import_preferred_warehouse');
         if ($cfg_wh !== '') $candidates[] = trim($cfg_wh);
@@ -256,10 +254,20 @@ class ModelExtensionShippingBanggood extends Model {
         }
 
         $out = array();
+        $map = array(
+            'china' => 'CN',
+            'united states' => 'US',
+            'united kingdom' => 'UK',
+            'hong kong' => 'HK',
+            'europe' => 'EU',
+            'australia' => 'AU'
+        );
         foreach ($candidates as $c) {
             $c = trim($c);
             if ($c === '') continue;
             if (!in_array($c, $out, true)) $out[] = $c;
+            $low = strtolower($c);
+            if (isset($map[$low]) && !in_array($map[$low], $out, true)) $out[] = $map[$low];
         }
         return $out;
     }
