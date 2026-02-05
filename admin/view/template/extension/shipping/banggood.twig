@@ -108,13 +108,14 @@
 {{ footer }}
 
 <script type="text/javascript">
+var bgTestShipmentsUrl = '{{ test_shipments_url|default(('index.php?route=extension/shipping/banggood/testShipments&user_token=' ~ user_token))|raw }}'.replace(/&amp;/g, '&');
 $('#bg-test-shipments').on('click', function() {
   var $btn = $(this);
   var $out = $('#bg-test-output');
   $out.hide().text('');
   $btn.prop('disabled', true);
   $.ajax({
-    url: '{{ test_shipments_url|raw }}',
+    url: bgTestShipmentsUrl,
     type: 'post',
     dataType: 'json',
     data: {
