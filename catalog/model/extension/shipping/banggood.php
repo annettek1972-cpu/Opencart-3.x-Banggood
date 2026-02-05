@@ -18,7 +18,7 @@ class ModelExtensionShippingBanggood extends Model {
             return array();
         }
 
-        $countryCandidates = $this->resolveCountryCandidates($address);
+        $countryCandidates = $this->resolveCountryCandidates($address, $config, $cacheDays);
         if (empty($countryCandidates)) {
             return array(
                 'code' => 'banggood',
@@ -149,7 +149,7 @@ class ModelExtensionShippingBanggood extends Model {
         );
     }
 
-    protected function resolveCountryCandidates($address) {
+    protected function resolveCountryCandidates($address, $config, $cacheDays) {
         $candidates = array();
         if (!empty($address['country'])) {
             $candidates[] = strtolower(trim((string)$address['country']));
@@ -163,11 +163,25 @@ class ModelExtensionShippingBanggood extends Model {
                 if (!empty($info['name'])) $candidates[] = strtolower(trim((string)$info['name']));
             } catch (Exception $e) {}
         }
+        // Map to Banggood-provided country names when available.
+        $bgMap = array();
+        $bgList = $this->getBanggoodCountriesCached($config, $cacheDays);
+        if (!empty($bgList) && is_array($bgList)) {
+            foreach ($bgList as $row) {
+                if (!empty($row['country_name'])) {
+                    $n = strtolower(trim((string)$row['country_name']));
+                    if ($n !== '') $bgMap[$n] = $n;
+                }
+            }
+        }
         // de-dup / remove empty
         $out = array();
         foreach ($candidates as $c) {
             $c = trim($c);
             if ($c === '') continue;
+            if (isset($bgMap[$c])) {
+                if (!in_array($bgMap[$c], $out, true)) $out[] = $bgMap[$c];
+            }
             if (!in_array($c, $out, true)) $out[] = $c;
         }
         return $out;
@@ -354,11 +368,56 @@ class ModelExtensionShippingBanggood extends Model {
         return $days;
     }
 
+    protected function getBanggoodCountriesCached($config, $cacheDays) {
+        $this->ensureCountriesCacheTableExists();
+        $lang = (string)$config['lang'];
+        $row = null;
+        try {
+            $qr = $this->db->query("SELECT * FROM `" . DB_PREFIX . "bg_countries_cache` WHERE `lang` = '" . $this->db->escape($lang) . "' LIMIT 1");
+            if ($qr && $qr->num_rows) $row = $qr->row;
+        } catch (Exception $e) {}
+
+        if ($row && !empty($row['fetched_at'])) {
+            $ageDays = (time() - strtotime($row['fetched_at'])) / 86400;
+            if ($ageDays <= $cacheDays) {
+                $decoded = json_decode((string)$row['response_json'], true);
+                if (is_array($decoded) && !empty($decoded['countries'])) {
+                    return $decoded['countries'];
+                }
+            }
+        }
+
+        try {
+            $resp = $this->apiRequest($config, 'common/getCountries', 'GET', array('lang' => $lang));
+            $json = json_encode($resp, JSON_UNESCAPED_UNICODE);
+            $now = date('Y-m-d H:i:s');
+            $this->db->query("INSERT INTO `" . DB_PREFIX . "bg_countries_cache`
+                (`lang`,`response_json`,`fetched_at`)
+                VALUES ('" . $this->db->escape($lang) . "','" . $this->db->escape($json) . "','" . $this->db->escape($now) . "')
+                ON DUPLICATE KEY UPDATE `response_json` = VALUES(`response_json`), `fetched_at` = VALUES(`fetched_at`)");
+            if (is_array($resp) && !empty($resp['countries'])) return $resp['countries'];
+        } catch (Exception $e) {}
+
+        return array();
+    }
+
+    protected function ensureCountriesCacheTableExists() {
+        $tbl = DB_PREFIX . "bg_countries_cache";
+        $this->db->query("CREATE TABLE IF NOT EXISTS `" . $tbl . "` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `lang` varchar(10) NOT NULL,
+            `response_json` longtext,
+            `fetched_at` datetime DEFAULT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uk_lang` (`lang`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;");
+    }
+
     protected function getShipmentsCached($bg_id, $warehouse, $country, $poa_id, $quantity, $config, $cacheDays) {
         $this->ensureShipmentsCacheTableExists();
         $bg_id = (string)$bg_id;
         $warehouse = trim((string)$warehouse);
-        $country = trim((string)$country);
+        $country = strtolower(trim((string)$country));
         $poa_id = trim((string)$poa_id);
         $quantity = (int)$quantity;
         $currency = (string)$config['currency'];
