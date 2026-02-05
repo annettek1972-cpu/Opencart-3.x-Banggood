@@ -152,15 +152,28 @@ class ModelExtensionShippingBanggood extends Model {
     protected function resolveCountryCandidates($address, $config, $cacheDays) {
         $candidates = array();
         if (!empty($address['country'])) {
-            $candidates[] = strtolower(trim((string)$address['country']));
+            $rawCountry = trim((string)$address['country']);
+            if ($rawCountry !== '') {
+                $candidates[] = $rawCountry;
+                $candidates[] = strtolower($rawCountry);
+            }
         }
         if (!empty($address['country_id'])) {
             try {
                 $this->load->model('localisation/country');
                 $info = $this->model_localisation_country->getCountry($address['country_id']);
-                if (!empty($info['iso_code_2'])) $candidates[] = strtolower(trim((string)$info['iso_code_2']));
-                if (!empty($info['iso_code_3'])) $candidates[] = strtolower(trim((string)$info['iso_code_3']));
-                if (!empty($info['name'])) $candidates[] = strtolower(trim((string)$info['name']));
+                if (!empty($info['iso_code_2'])) {
+                    $iso2 = trim((string)$info['iso_code_2']);
+                    if ($iso2 !== '') { $candidates[] = $iso2; $candidates[] = strtolower($iso2); }
+                }
+                if (!empty($info['iso_code_3'])) {
+                    $iso3 = trim((string)$info['iso_code_3']);
+                    if ($iso3 !== '') { $candidates[] = $iso3; $candidates[] = strtolower($iso3); }
+                }
+                if (!empty($info['name'])) {
+                    $n = trim((string)$info['name']);
+                    if ($n !== '') { $candidates[] = $n; $candidates[] = strtolower($n); }
+                }
             } catch (Exception $e) {}
         }
         // Map to Banggood-provided country names when available.
@@ -169,8 +182,10 @@ class ModelExtensionShippingBanggood extends Model {
         if (!empty($bgList) && is_array($bgList)) {
             foreach ($bgList as $row) {
                 if (!empty($row['country_name'])) {
-                    $n = strtolower(trim((string)$row['country_name']));
-                    if ($n !== '') $bgMap[$n] = $n;
+                    $nRaw = trim((string)$row['country_name']);
+                    if ($nRaw === '') continue;
+                    $bgMap[$nRaw] = $nRaw;
+                    $bgMap[strtolower($nRaw)] = $nRaw;
                 }
             }
         }
@@ -417,7 +432,7 @@ class ModelExtensionShippingBanggood extends Model {
         $this->ensureShipmentsCacheTableExists();
         $bg_id = (string)$bg_id;
         $warehouse = trim((string)$warehouse);
-        $country = strtolower(trim((string)$country));
+        $country = trim((string)$country);
         $poa_id = trim((string)$poa_id);
         $quantity = (int)$quantity;
         $currency = (string)$config['currency'];
