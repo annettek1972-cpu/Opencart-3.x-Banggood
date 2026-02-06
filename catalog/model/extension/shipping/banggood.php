@@ -100,6 +100,33 @@ class ModelExtensionShippingBanggood extends Model {
             }
 
             if (empty($methods)) {
+                $fallback = $this->getCachedShipmentsForProduct($bg_id, $countryCandidates);
+                if (empty($fallback)) {
+                    $fallback = $this->getCachedShipmentsAnyCountry($bg_id);
+                }
+                if (!empty($fallback)) {
+                    $shipment_list = $this->extractShipmentList($fallback);
+                    if (!empty($shipment_list)) {
+                        foreach ($shipment_list as $s) {
+                            $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
+                            $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
+                                : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
+                            if ($code === '') continue;
+                            $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
+                                : $code);
+                            $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                            $methods[$code] = array(
+                                'fee' => $fee,
+                                'name' => $name,
+                                'day' => $day
+                            );
+                        }
+                    }
+                }
+            }
+
+            if (empty($methods)) {
                 if (empty($errors)) {
                     $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' to ' . ($countryUsed !== '' ? $countryUsed : 'destination');
                 }
@@ -511,6 +538,52 @@ class ModelExtensionShippingBanggood extends Model {
         $json = json_encode($resp, JSON_UNESCAPED_UNICODE);
         $this->saveShipmentCacheRow($bg_id, $warehouse, $country, $poa_id, $quantity, $currency, $lang, $json);
         return $resp;
+    }
+
+    protected function getCachedShipmentsForProduct($bg_id, array $countryCandidates) {
+        $this->ensureShipmentsCacheTableExists();
+        $bg_id = (string)$bg_id;
+        if ($bg_id === '') return array();
+        $norm = array();
+        foreach ($countryCandidates as $c) {
+            $c = strtolower(trim((string)$c));
+            if ($c !== '') $norm[] = $c;
+        }
+        if (empty($norm)) return array();
+        $norm = array_values(array_unique($norm));
+        $escaped = array();
+        foreach ($norm as $c) $escaped[] = "'" . $this->db->escape($c) . "'";
+        $sql = "SELECT response_json FROM `" . DB_PREFIX . "bg_shipments_cache`
+            WHERE bg_product_id = '" . $this->db->escape($bg_id) . "'
+              AND LOWER(country) IN (" . implode(',', $escaped) . ")
+            ORDER BY fetched_at DESC
+            LIMIT 1";
+        try {
+            $qr = $this->db->query($sql);
+            if ($qr && $qr->num_rows && !empty($qr->row['response_json'])) {
+                $decoded = json_decode((string)$qr->row['response_json'], true);
+                if (is_array($decoded)) return $decoded;
+            }
+        } catch (Exception $e) {}
+        return array();
+    }
+
+    protected function getCachedShipmentsAnyCountry($bg_id) {
+        $this->ensureShipmentsCacheTableExists();
+        $bg_id = (string)$bg_id;
+        if ($bg_id === '') return array();
+        $sql = "SELECT response_json FROM `" . DB_PREFIX . "bg_shipments_cache`
+            WHERE bg_product_id = '" . $this->db->escape($bg_id) . "'
+            ORDER BY fetched_at DESC
+            LIMIT 1";
+        try {
+            $qr = $this->db->query($sql);
+            if ($qr && $qr->num_rows && !empty($qr->row['response_json'])) {
+                $decoded = json_decode((string)$qr->row['response_json'], true);
+                if (is_array($decoded)) return $decoded;
+            }
+        } catch (Exception $e) {}
+        return array();
     }
 
     protected function ensureShipmentsCacheTableExists() {
