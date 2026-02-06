@@ -35,8 +35,7 @@ class ModelExtensionShippingBanggood extends Model {
         $products = $this->cart->getProducts();
         if (empty($products)) return array();
 
-        $details = array();
-        $totalCost = 0.0;
+        $combinedMethods = null;
         $errors = array();
 
         foreach ($products as $product) {
@@ -57,9 +56,9 @@ class ModelExtensionShippingBanggood extends Model {
             if (empty($poaCandidates)) $poaCandidates = array('');
             if (!in_array('', $poaCandidates, true)) $poaCandidates[] = '';
 
-            $best = null;
             $countryUsed = '';
             $found = false;
+            $methods = array();
             foreach ($warehouseCandidates as $warehouse) {
                 foreach ($poaCandidates as $poa_id) {
                     foreach ($countryCandidates as $country) {
@@ -71,19 +70,20 @@ class ModelExtensionShippingBanggood extends Model {
 
                             foreach ($shipment_list as $s) {
                                 $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
-                                if ($best === null || $fee < $best['fee']) {
-                                    $best = array(
-                                        'fee' => $fee,
-                                        'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
-                                            : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
-                                            : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping')),
-                                        'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
-                                            : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
-                                        'warehouse' => $warehouse
-                                    );
-                                }
+                                $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
+                                    : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
+                                if ($code === '') continue;
+                                $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                    : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
+                                    : $code);
+                                $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                                $methods[$code] = array(
+                                    'fee' => $fee,
+                                    'name' => $name,
+                                    'day' => $day
+                                );
                             }
-                            $found = ($best !== null);
+                            $found = !empty($methods);
                             if ($found) break 3;
                         } catch (Exception $e) {
                             $msg = $e->getMessage();
@@ -99,49 +99,63 @@ class ModelExtensionShippingBanggood extends Model {
                 }
             }
 
-            if ($best === null) {
+            if (empty($methods)) {
                 if (empty($errors)) {
                     $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' to ' . ($countryUsed !== '' ? $countryUsed : 'destination');
                 }
                 continue;
             }
 
-            $totalCost += (float)$best['fee'];
-            $productName = isset($product['name']) ? $product['name'] : $bg_id;
-            $details[] = $productName . ': ' . $best['name'] . ' ' . $config['currency'] . number_format((float)$best['fee'], 2);
+            if ($combinedMethods === null) {
+                $combinedMethods = array();
+                foreach ($methods as $code => $m) {
+                    $combinedMethods[$code] = array(
+                        'fee' => (float)$m['fee'],
+                        'name' => $m['name'],
+                        'day' => $m['day']
+                    );
+                }
+            } else {
+                foreach ($combinedMethods as $code => $m) {
+                    if (!isset($methods[$code])) {
+                        unset($combinedMethods[$code]);
+                        continue;
+                    }
+                    $combinedMethods[$code]['fee'] += (float)$methods[$code]['fee'];
+                }
+            }
         }
 
-        if (!empty($errors)) {
-            return array(
-                'code' => 'banggood',
-                'title' => $this->language->get('text_title'),
-                'quote' => array(),
-                'sort_order' => (int)$this->config->get('shipping_banggood_sort_order'),
-                'error' => $errors[0]
-            );
-        }
-
-        if (empty($details)) {
+        if (empty($combinedMethods)) {
+            if (!empty($errors)) {
+                return array(
+                    'code' => 'banggood',
+                    'title' => $this->language->get('text_title'),
+                    'quote' => array(),
+                    'sort_order' => (int)$this->config->get('shipping_banggood_sort_order'),
+                    'error' => $errors[0]
+                );
+            }
             return array();
         }
 
-        $detailText = implode(' | ', $details);
-        if (strlen($detailText) > 180) {
-            $detailText = substr($detailText, 0, 176) . '...';
+        $quote = array();
+        foreach ($combinedMethods as $code => $m) {
+            $title = $this->language->get('text_title') . ' - ' . $m['name'];
+            if ($m['day'] !== '') $title .= ' (' . $m['day'] . ')';
+            $quote[$code] = array(
+                'code' => 'banggood.' . $code,
+                'title' => $title,
+                'cost' => (float)$m['fee'],
+                'tax_class_id' => 0,
+                'text' => $this->currency->format((float)$m['fee'], $this->session->data['currency'])
+            );
         }
-
-        $quote = array(
-            'code' => 'banggood.banggood',
-            'title' => $this->language->get('text_title') . ' - ' . $detailText,
-            'cost' => $totalCost,
-            'tax_class_id' => 0,
-            'text' => $this->currency->format($totalCost, $this->session->data['currency'])
-        );
 
         return array(
             'code' => 'banggood',
             'title' => $this->language->get('text_title'),
-            'quote' => array('banggood' => $quote),
+            'quote' => $quote,
             'sort_order' => (int)$this->config->get('shipping_banggood_sort_order'),
             'error' => ''
         );
@@ -201,8 +215,16 @@ class ModelExtensionShippingBanggood extends Model {
     }
 
     protected function extractBanggoodId(array $product) {
+        $model = '';
         if (!empty($product['model'])) {
             $model = (string)$product['model'];
+        } elseif (!empty($product['product_id'])) {
+            try {
+                $q = $this->db->query("SELECT model FROM `" . DB_PREFIX . "product` WHERE product_id = " . (int)$product['product_id'] . " LIMIT 1");
+                if ($q && $q->num_rows && !empty($q->row['model'])) $model = (string)$q->row['model'];
+            } catch (Exception $e) {}
+        }
+        if ($model !== '') {
             if (stripos($model, self::PRODUCT_CODE_PREFIX) === 0) {
                 return trim(substr($model, strlen(self::PRODUCT_CODE_PREFIX)));
             }
