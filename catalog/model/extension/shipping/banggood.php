@@ -232,6 +232,14 @@ class ModelExtensionShippingBanggood extends Model {
                 return trim(substr($model, strlen(self::LEGACY_PRODUCT_CODE_PREFIX)));
             }
         }
+        if (!empty($product['product_id'])) {
+            try {
+                $q = $this->db->query("SELECT bg_id FROM `" . DB_PREFIX . "product_variant` WHERE product_id = " . (int)$product['product_id'] . " AND bg_id IS NOT NULL AND bg_id <> '' LIMIT 1");
+                if ($q && $q->num_rows && !empty($q->row['bg_id'])) {
+                    return trim((string)$q->row['bg_id']);
+                }
+            } catch (Exception $e) {}
+        }
         return '';
     }
 
