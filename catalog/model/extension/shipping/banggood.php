@@ -131,10 +131,11 @@ class ModelExtensionShippingBanggood extends Model {
                                 $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
                                     : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
                                 if ($code === '') continue;
-                                $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                $rawName = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
                                     : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
-                                    : $code);
-                                $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                                    : '');
+                                $name = $this->formatShipMethodName($rawName, $code);
+                                $day = $this->formatShipDay(isset($s['shipday']) ? (string)$s['shipday'] : '');
                                 $methods[$code] = array(
                                     'fee' => $fee,
                                     'name' => $name,
@@ -170,10 +171,11 @@ class ModelExtensionShippingBanggood extends Model {
                             $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
                                 : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
                             if ($code === '') continue;
-                            $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                            $rawName = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
                                 : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
-                                : $code);
-                            $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                                : '');
+                            $name = $this->formatShipMethodName($rawName, $code);
+                            $day = $this->formatShipDay(isset($s['shipday']) ? (string)$s['shipday'] : '');
                             $methods[$code] = array(
                                 'fee' => $fee,
                                 'name' => $name,
@@ -226,8 +228,8 @@ class ModelExtensionShippingBanggood extends Model {
 
         $quote = array();
         foreach ($combinedMethods as $code => $m) {
-            $title = $this->language->get('text_title') . ' - ' . $m['name'];
-            if ($m['day'] !== '') $title .= ' (' . $m['day'] . ')';
+            $title = $m['name'];
+            if ($m['day'] !== '') $title .= ' - ' . $m['day'];
             $quote[$code] = array(
                 'code' => 'banggood.' . $code,
                 'title' => $title,
@@ -472,6 +474,38 @@ class ModelExtensionShippingBanggood extends Model {
         if ($raw === null) return 0.0;
         $num = (float)str_replace(',', '', preg_replace('/[^\d\.\-]/', '', (string)$raw));
         return $num;
+    }
+
+    protected function formatShipDay($raw) {
+        $raw = trim((string)$raw);
+        if ($raw === '') return '';
+        // Normalize "15-30" or "15-30 days" to "15 to 30 days"
+        if (preg_match('/^(\d+)\s*-\s*(\d+)(.*)$/', $raw, $m)) {
+            $suffix = trim($m[3]);
+            $suffix = $suffix !== '' ? $suffix : 'days';
+            return $m[1] . ' to ' . $m[2] . ' ' . $suffix;
+        }
+        return $raw;
+    }
+
+    protected function formatShipMethodName($rawName, $code) {
+        $rawName = trim((string)$rawName);
+        $code = trim((string)$code);
+        $key = $rawName !== '' ? strtoupper($rawName) : strtoupper($code);
+        $map = array(
+            'LC_SHIPMENT_HKAIRMAIL_HKAIRMAIL' => 'Hong Kong Air Mail',
+            'LC_SHIPMENT_BANGGOOD_PRIORITY_SHIPPING' => 'Priority Shipping',
+            'LC_SHIPMENT_BANGGOOD_EXPEDITED_SHIPPING' => 'Expedited Shipping'
+        );
+        if (isset($map[$key])) return $map[$key];
+        if (strpos($key, 'LC_SHIPMENT_') === 0) {
+            $label = substr($key, strlen('LC_SHIPMENT_'));
+            $label = str_replace('_', ' ', $label);
+            $label = ucwords(strtolower($label));
+            return $label;
+        }
+        if ($rawName !== '') return $rawName;
+        return $code !== '' ? $code : 'Shipping';
     }
 
     protected function extractShipmentList($resp) {
