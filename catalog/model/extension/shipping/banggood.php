@@ -23,6 +23,16 @@ class ModelExtensionShippingBanggood extends Model {
 
         $countryCandidates = $this->resolveCountryCandidates($address, $config, $cacheDays);
         if (empty($countryCandidates)) {
+            if (!empty($this->session->data['shipping_address'])) {
+                $countryCandidates = $this->resolveCountryCandidates($this->session->data['shipping_address'], $config, $cacheDays);
+            }
+        }
+        if (empty($countryCandidates)) {
+            if (!empty($this->session->data['payment_address'])) {
+                $countryCandidates = $this->resolveCountryCandidates($this->session->data['payment_address'], $config, $cacheDays);
+            }
+        }
+        if (empty($countryCandidates)) {
             return array(
                 'code' => 'banggood',
                 'title' => $this->language->get('text_title'),
@@ -49,6 +59,54 @@ class ModelExtensionShippingBanggood extends Model {
             $poaCandidates = $this->resolvePoaIdCandidates($product, $bg_id, $config);
 
             if (empty($warehouseCandidates)) {
+                // If we already have cached shipments, use them even without warehouse data.
+                $fallback = $this->getCachedShipmentsForProduct($bg_id, $countryCandidates);
+                if (empty($fallback)) {
+                    $fallback = $this->getCachedShipmentsAnyCountry($bg_id);
+                }
+                $methods = array();
+                if (!empty($fallback)) {
+                    $shipment_list = $this->extractShipmentList($fallback);
+                    if (!empty($shipment_list)) {
+                        foreach ($shipment_list as $s) {
+                            $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
+                            $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
+                                : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
+                            if ($code === '') continue;
+                            $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
+                                : $code);
+                            $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                            $methods[$code] = array(
+                                'fee' => $fee,
+                                'name' => $name,
+                                'day' => $day
+                            );
+                        }
+                    }
+                }
+                if (!empty($methods)) {
+                    if ($combinedMethods === null) {
+                        $combinedMethods = array();
+                        foreach ($methods as $code => $m) {
+                            $combinedMethods[$code] = array(
+                                'fee' => (float)$m['fee'],
+                                'name' => $m['name'],
+                                'day' => $m['day']
+                            );
+                        }
+                    } else {
+                        foreach ($combinedMethods as $code => $m) {
+                            if (!isset($methods[$code])) {
+                                unset($combinedMethods[$code]);
+                                continue;
+                            }
+                            $combinedMethods[$code]['fee'] += (float)$methods[$code]['fee'];
+                        }
+                    }
+                    continue;
+                }
+
                 $errors[] = 'Banggood shipping not available for product ' . $bg_id . ' (no warehouse)';
                 continue;
             }
