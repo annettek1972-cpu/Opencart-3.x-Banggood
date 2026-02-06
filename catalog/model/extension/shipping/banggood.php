@@ -73,14 +73,18 @@ class ModelExtensionShippingBanggood extends Model {
                             $code = isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
                                 : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : '');
                             if ($code === '') continue;
-                            $name = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                            $rawName = isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
                                 : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
-                                : $code);
-                            $day = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                                : '');
+                            $name = $this->formatShipMethodName($rawName, $code);
+                            $dayRaw = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                            $range = $this->parseShipDayRange($dayRaw);
                             $methods[$code] = array(
                                 'fee' => $fee,
                                 'name' => $name,
-                                'day' => $day
+                                'day_raw' => $dayRaw,
+                                'min_days' => $range ? $range[0] : null,
+                                'max_days' => $range ? $range[1] : null
                             );
                         }
                     }
@@ -135,11 +139,14 @@ class ModelExtensionShippingBanggood extends Model {
                                     : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
                                     : '');
                                 $name = $this->formatShipMethodName($rawName, $code);
-                                $day = $this->formatShipDay(isset($s['shipday']) ? (string)$s['shipday'] : '');
+                                $dayRaw = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                                $range = $this->parseShipDayRange($dayRaw);
                                 $methods[$code] = array(
                                     'fee' => $fee,
                                     'name' => $name,
-                                    'day' => $day
+                                    'day_raw' => $dayRaw,
+                                    'min_days' => $range ? $range[0] : null,
+                                    'max_days' => $range ? $range[1] : null
                                 );
                             }
                             $found = !empty($methods);
@@ -175,11 +182,14 @@ class ModelExtensionShippingBanggood extends Model {
                                 : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
                                 : '');
                             $name = $this->formatShipMethodName($rawName, $code);
-                            $day = $this->formatShipDay(isset($s['shipday']) ? (string)$s['shipday'] : '');
+                            $dayRaw = isset($s['shipday']) ? (string)$s['shipday'] : '';
+                            $range = $this->parseShipDayRange($dayRaw);
                             $methods[$code] = array(
                                 'fee' => $fee,
                                 'name' => $name,
-                                'day' => $day
+                                'day_raw' => $dayRaw,
+                                'min_days' => $range ? $range[0] : null,
+                                'max_days' => $range ? $range[1] : null
                             );
                         }
                     }
@@ -199,7 +209,8 @@ class ModelExtensionShippingBanggood extends Model {
                     $combinedMethods[$code] = array(
                         'fee' => (float)$m['fee'],
                         'name' => $m['name'],
-                        'day' => $m['day']
+                        'min_days' => isset($m['min_days']) ? $m['min_days'] : null,
+                        'max_days' => isset($m['max_days']) ? $m['max_days'] : null
                     );
                 }
             } else {
@@ -209,6 +220,18 @@ class ModelExtensionShippingBanggood extends Model {
                         continue;
                     }
                     $combinedMethods[$code]['fee'] += (float)$methods[$code]['fee'];
+                    $min = isset($methods[$code]['min_days']) ? $methods[$code]['min_days'] : null;
+                    $max = isset($methods[$code]['max_days']) ? $methods[$code]['max_days'] : null;
+                    if ($min !== null) {
+                        if ($combinedMethods[$code]['min_days'] === null || $min > $combinedMethods[$code]['min_days']) {
+                            $combinedMethods[$code]['min_days'] = $min;
+                        }
+                    }
+                    if ($max !== null) {
+                        if ($combinedMethods[$code]['max_days'] === null || $max > $combinedMethods[$code]['max_days']) {
+                            $combinedMethods[$code]['max_days'] = $max;
+                        }
+                    }
                 }
             }
         }
@@ -229,7 +252,16 @@ class ModelExtensionShippingBanggood extends Model {
         $quote = array();
         foreach ($combinedMethods as $code => $m) {
             $title = $m['name'];
-            if ($m['day'] !== '') $title .= ' - ' . $m['day'];
+            $dayText = $this->formatShipDayRange(
+                isset($m['min_days']) ? $m['min_days'] : null,
+                isset($m['max_days']) ? $m['max_days'] : null
+            );
+            if ($dayText !== '') $title .= ' - ' . $dayText;
+            $etaText = $this->formatShipEtaRange(
+                isset($m['min_days']) ? $m['min_days'] : null,
+                isset($m['max_days']) ? $m['max_days'] : null
+            );
+            if ($etaText !== '') $title .= ' - ' . $etaText;
             $quote[$code] = array(
                 'code' => 'banggood.' . $code,
                 'title' => $title,
@@ -476,16 +508,60 @@ class ModelExtensionShippingBanggood extends Model {
         return $num;
     }
 
-    protected function formatShipDay($raw) {
+    protected function parseShipDayRange($raw) {
         $raw = trim((string)$raw);
-        if ($raw === '') return '';
-        // Normalize "15-30" or "15-30 days" to "15 to 30 days"
-        if (preg_match('/^(\d+)\s*-\s*(\d+)(.*)$/', $raw, $m)) {
-            $suffix = trim($m[3]);
-            $suffix = $suffix !== '' ? $suffix : 'days';
-            return $m[1] . ' to ' . $m[2] . ' ' . $suffix;
+        if ($raw === '') return null;
+        if (preg_match('/(\d+)\s*-\s*(\d+)/', $raw, $m)) {
+            $min = (int)$m[1];
+            $max = (int)$m[2];
+            if ($min > 0 && $max > 0) return array($min, $max);
         }
-        return $raw;
+        if (preg_match('/(\d+)/', $raw, $m)) {
+            $v = (int)$m[1];
+            if ($v > 0) return array($v, $v);
+        }
+        return null;
+    }
+
+    protected function formatShipDayRange($minDays, $maxDays) {
+        if ($minDays === null || $maxDays === null) return '';
+        $minDays = (int)$minDays;
+        $maxDays = (int)$maxDays;
+        if ($minDays <= 0 || $maxDays <= 0) return '';
+        if ($minDays === $maxDays) return $minDays . ' days';
+        return $minDays . ' to ' . $maxDays . ' days';
+    }
+
+    protected function formatShipEtaRange($minDays, $maxDays) {
+        if ($minDays === null || $maxDays === null) return '';
+        $minDays = (int)$minDays;
+        $maxDays = (int)$maxDays;
+        if ($minDays <= 0 || $maxDays <= 0) return '';
+        try {
+            $start = new DateTime('now');
+            $end = new DateTime('now');
+            $start->add(new DateInterval('P' . $minDays . 'D'));
+            $end->add(new DateInterval('P' . $maxDays . 'D'));
+            $startLabel = $this->formatDateWithOrdinal($start);
+            $endLabel = $this->formatDateWithOrdinal($end);
+            if ($startLabel === '' || $endLabel === '') return '';
+            if ($startLabel === $endLabel) return $startLabel;
+            return $startLabel . ' to ' . $endLabel;
+        } catch (Exception $e) {
+            return '';
+        }
+    }
+
+    protected function formatDateWithOrdinal(DateTime $dt) {
+        $day = (int)$dt->format('j');
+        $suffix = 'th';
+        if ($day % 100 < 11 || $day % 100 > 13) {
+            $last = $day % 10;
+            if ($last === 1) $suffix = 'st';
+            elseif ($last === 2) $suffix = 'nd';
+            elseif ($last === 3) $suffix = 'rd';
+        }
+        return $dt->format('M ') . $day . $suffix;
     }
 
     protected function formatShipMethodName($rawName, $code) {
