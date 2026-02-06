@@ -18,6 +18,9 @@ class ModelExtensionShippingBanggood extends Model {
             return array();
         }
 
+        $config = $this->getBanggoodConfig();
+        $cacheDays = $this->getCacheDays();
+
         $countryCandidates = $this->resolveCountryCandidates($address, $config, $cacheDays);
         if (empty($countryCandidates)) {
             return array(
@@ -31,9 +34,6 @@ class ModelExtensionShippingBanggood extends Model {
 
         $products = $this->cart->getProducts();
         if (empty($products)) return array();
-
-        $config = $this->getBanggoodConfig();
-        $cacheDays = $this->getCacheDays();
 
         $details = array();
         $totalCost = 0.0;
@@ -71,14 +71,14 @@ class ModelExtensionShippingBanggood extends Model {
 
                             foreach ($shipment_list as $s) {
                                 $fee = $this->parseShipFee(isset($s['shipfee']) ? $s['shipfee'] : null);
-                            if ($best === null || $fee < $best['fee']) {
+                                if ($best === null || $fee < $best['fee']) {
                                     $best = array(
                                         'fee' => $fee,
-                                    'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
-                                        : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
-                                        : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping')),
-                                    'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
-                                        : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
+                                        'name' => isset($s['shipmethod_name']) ? (string)$s['shipmethod_name']
+                                            : (isset($s['shipmethodname']) ? (string)$s['shipmethodname']
+                                            : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : 'Shipping')),
+                                        'code' => isset($s['shipmethod_code']) ? (string)$s['shipmethod_code']
+                                            : (isset($s['shipmethodcode']) ? (string)$s['shipmethodcode'] : ''),
                                         'warehouse' => $warehouse
                                     );
                                 }
