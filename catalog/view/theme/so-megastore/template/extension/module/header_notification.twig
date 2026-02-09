@@ -1,16 +1,16 @@
 {% if items %}
 <div class="head-notify">
-  <div class="head-notify__inner">
+  <div class="head-notify__inner container">
     {% for item in items %}
       <span class="head-notify__item">
-        <strong>{{ item.label }}</strong>{% if item.value is not empty %}: {{ item.value }}{% endif %}
+        {{ item.label }}{% if item.value is not empty %}: {{ item.value }}{% endif %}
       </span>
     {% endfor %}
   </div>
 </div>
 <style>
 .head-notify {
-  background: #d9534f;
+  background: #EC1A24;
   color: #fff;
   font-size: 13px;
   line-height: 1.4;
@@ -20,6 +20,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  justify-content: center;
+  max-width: 1200px;
 }
 .head-notify__item {
   white-space: nowrap;
