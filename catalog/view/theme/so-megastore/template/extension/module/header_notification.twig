@@ -1,0 +1,28 @@
+{% if items %}
+<div class="head-notify">
+  <div class="head-notify__inner">
+    {% for item in items %}
+      <span class="head-notify__item">
+        <strong>{{ item.label }}</strong>{% if item.value is not empty %}: {{ item.value }}{% endif %}
+      </span>
+    {% endfor %}
+  </div>
+</div>
+<style>
+.head-notify {
+  background: #d9534f;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 6px 10px;
+}
+.head-notify__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.head-notify__item {
+  white-space: nowrap;
+}
+</style>
+{% endif %}
