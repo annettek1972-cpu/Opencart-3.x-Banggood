@@ -11,7 +11,7 @@ class ControllerExtensionModuleHeaderNotification extends Controller {
         if (($this->request->server['REQUEST_METHOD'] == 'POST') && $this->validate()) {
             $this->model_setting_setting->editSetting('module_header_notification', $this->request->post);
             $this->session->data['success'] = $this->language->get('text_success');
-            $this->response->redirect($this->url->link('marketplace/extension', 'user_token=' . $this->session->data['user_token'] . '&type=module', true));
+            $this->response->redirect($this->url->link('extension/module/header_notification', 'user_token=' . $this->session->data['user_token'], true));
             return;
         }
 
