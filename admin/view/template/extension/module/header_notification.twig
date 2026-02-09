@@ -111,7 +111,7 @@ $('#add-custom-item').on('click', function() {
   html += '  <td><input type="text" name="module_header_notification_custom_items[' + custom_row + '][label]" value="" class="form-control" /></td>';
   html += '  <td><input type="text" name="module_header_notification_custom_items[' + custom_row + '][value]" value="" class="form-control" /></td>';
   html += '  <td class="text-center"><input type="checkbox" name="module_header_notification_custom_items[' + custom_row + '][enabled]" value="1" checked="checked" /></td>';
-  html += '  <td class="text-right"><button type="button" class="btn btn-danger btn-xs" onclick="$(\\'#custom-item-row' + custom_row + '\\').remove();">{{ text_remove }}</button></td>';
+  html += '  <td class="text-right"><button type="button" class="btn btn-danger btn-xs" onclick="$(\'#custom-item-row' + custom_row + '\').remove();">{{ text_remove }}</button></td>';
   html += '</tr>';
   $('#custom-items tbody').append(html);
   custom_row++;
