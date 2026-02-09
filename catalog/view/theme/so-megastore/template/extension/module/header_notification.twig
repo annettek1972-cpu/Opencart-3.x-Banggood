@@ -3,7 +3,7 @@
   <div class="head-notify__inner container">
     {% for item in items %}
       <span class="head-notify__item">
-        {{ item.label }}{% if item.value is not empty %}: {{ item.value }}{% endif %}
+        <span class="head-notify__label">{{ item.label }}</span>{% if item.value is not empty %}: {{ item.value }}{% endif %}
       </span>
     {% endfor %}
   </div>
@@ -25,6 +25,8 @@
 }
 .head-notify__item {
   white-space: nowrap;
+}
+.head-notify__label {
   font-weight: 501;
 }
 </style>
