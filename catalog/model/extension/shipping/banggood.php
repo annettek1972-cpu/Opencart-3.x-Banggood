@@ -264,13 +264,13 @@ class ModelExtensionShippingBanggood extends Model {
             if ($etaText !== '') $title .= ' - ' . $etaText;
             $priceText = $this->currency->format((float)$m['fee'], $this->session->data['currency']);
             $title .= ' - ' . $priceText;
-            $title .= "\n" . $this->language->get('text_tracking_provided');
+            $title .= '<br />' . $this->language->get('text_tracking_provided');
             $quote[$code] = array(
                 'code' => 'banggood.' . $code,
                 'title' => $title,
                 'cost' => (float)$m['fee'],
                 'tax_class_id' => 0,
-                'text' => $this->currency->format((float)$m['fee'], $this->session->data['currency'])
+                'text' => ''
             );
         }
 
