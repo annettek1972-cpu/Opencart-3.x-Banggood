@@ -29,7 +29,7 @@ class ModelExtensionModuleHeaderNotification extends Model {
 
     public function getNewProductTotal24h() {
         try {
-            $q = $this->db->query("SELECT COUNT(*) AS total FROM `" . DB_PREFIX . "product` WHERE `date_added` >= DATE_SUB(NOW(), INTERVAL 1 DAY)");
+            $q = $this->db->query("SELECT COUNT(*) AS total FROM `" . DB_PREFIX . "product` WHERE `date_added` >= CURDATE()");
             return isset($q->row['total']) ? (int)$q->row['total'] : 0;
         } catch (Exception $e) {
             return 0;
