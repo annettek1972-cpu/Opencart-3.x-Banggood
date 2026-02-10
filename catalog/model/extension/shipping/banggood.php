@@ -262,7 +262,9 @@ class ModelExtensionShippingBanggood extends Model {
                 isset($m['max_days']) ? $m['max_days'] : null
             );
             if ($etaText !== '') $title .= ' - ' . $etaText;
-            $title .= '<br />' . $this->language->get('text_tracking_provided');
+            $priceText = $this->currency->format((float)$m['fee'], $this->session->data['currency']);
+            $title .= ' - ' . $priceText;
+            $title .= "\n" . $this->language->get('text_tracking_provided');
             $quote[$code] = array(
                 'code' => 'banggood.' . $code,
                 'title' => $title,
