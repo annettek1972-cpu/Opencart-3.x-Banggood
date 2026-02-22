@@ -402,11 +402,32 @@ try {
     $next_offset = $offset;
     $finished = false;
     $fetch_error = '';
+    $skipFetch = false;
+    $pendingCount = 0;
+
+    // If there are pending items, do not fetch new ones (check both possible tables).
+    try {
+        $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
+        $tables = array(DB_PREFIX . 'bg_fetched_products', 'oc_bg_fetched_products');
+        $checked = array();
+        foreach ($tables as $tbl) {
+            if (isset($checked[$tbl])) continue;
+            $checked[$tbl] = true;
+            $q = $db->query("SHOW TABLES LIKE '" . $db->escape($tbl) . "'");
+            if ($q && $q->num_rows) {
+                $pc = $db->query("SELECT COUNT(*) AS cnt FROM `" . $db->escape($tbl) . "` WHERE " . $pendingWhere)->row;
+                $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
+                if ($pendingCount > 0) { $skipFetch = true; break; }
+            }
+        }
+    } catch (Throwable $e) {
+        // ignore and proceed with fetch
+    }
 
     // Banggood docs: 20 products max per page.
     $api_page_size = 20;
 
-    for ($ci = $category_index; $ci < $total_categories && count($collected) < $chunkSize; $ci++) {
+    for ($ci = $category_index; !$skipFetch && $ci < $total_categories && count($collected) < $chunkSize; $ci++) {
         $cat_id = isset($rows[$ci]['cat_id']) ? (string)$rows[$ci]['cat_id'] : '';
         if ($cat_id === '') continue;
 

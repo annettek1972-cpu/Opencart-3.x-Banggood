@@ -2076,6 +2076,30 @@ HTML;
                 return;
             }
 
+            // Do not fetch new items while pending exists (check both possible tables).
+            try {
+                $pendingWhere = "(`status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending')";
+                $tables = array(DB_PREFIX . 'bg_fetched_products', 'oc_bg_fetched_products');
+                $checked = array();
+                foreach ($tables as $tbl) {
+                    if (isset($checked[$tbl])) continue;
+                    $checked[$tbl] = true;
+                    $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                    if ($q && $q->num_rows) {
+                        $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
+                        $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
+                        if ($pendingCount > 0) {
+                            $json['error'] = 'Pending items exist. Process pending items before fetching new products.';
+                            $json['pending'] = $pendingCount;
+                            $this->response->setOutput(json_encode($json));
+                            return;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore and continue fetch
+            }
+
             $chunk_size = isset($this->request->post['chunk_size']) ? max(1, (int)$this->request->post['chunk_size']) : 10;
 
             // Server-side cursor: stored in settings so it resumes after reloads.
