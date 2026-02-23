@@ -286,14 +286,13 @@ data-ov="{{ option_value.option_value_id }}"
 
 											<span class="option-content-box {{ option.name }} blinking{% if loop.first %} active{% endif %}" data-title="{{ option_value.name}} {{ radio_price }}" title ="Select {{ option.name }} {{ option_value.name}}">
 												
-										{% if option.name|lower == 'color' and option_value.image %}
+										{% if option_value.image and (option.name|lower == 'color' or option.name|lower == 'plush toy' or option.name|lower == '') %}
   <img
     src="{{ option_value.image|e }}"
-    alt="{{ option_value.name|e }}" title ="Select {{ option.name }} {{ option_value.name}}"
-    
+    alt="{{ option_value.name|e }}" title="Select {{ option.name }} {{ option_value.name }}"
   />
 {% else %}
-  <span class="sizes-top sizes width">{{ option_value.name|e }}</span>
+  <span class="sizes-top sizes width {{ option.name }}">{{ option_value.name|e }}</span>
 {% endif %}
 													<span class="option-name">
 													
@@ -736,7 +735,7 @@ data-ov="{{ option_value.option_value_id }}"
 										<div class="desc-image-box">
 										
 
-<div id="thumb-slider" class="gallery-slider contentslider contentslider--default" data-rtl="{{direction}}" data-autoplay="no"  data-pagination="yes" data-delay="4" data-speed="0.6" data-margin="0"  data-items_column0="1" data-items_column1="1" data-items_column2="1" data-items_column3="1" data-items_column4="1" data-arrows="yes" data-loop="yes" data-center="yes" data-loop="yes" data-hoverpause="yes">
+<div id="thumb-slider" class="gallery-slider contentslider contentslider--default" data-rtl="{{direction}}" data-autoplay="yes"  data-pagination="no" data-delay="4" data-speed="0.6" data-margin="0"  data-items_column0="1" data-items_column1="1" data-items_column2="1" data-items_column3="1" data-items_column4="1" data-arrows="no" data-loop="yes" data-center="yes" data-loop="yes" data-hoverpause="yes">
 	{% for key,image in images %}
 		<a class="thumbnail-2" title="{{ seo_h1 }} - {{ model }} - bargainbasement.club">
 			<img class="bottom-product-image" src="{{ image.popup }}" title="{{ seo_h1 }} - {{ model }} - bargainbasement.club" alt="{{ seo_h1 }} - {{ model }} - bargainbasement.club" />
@@ -755,8 +754,8 @@ data-ov="{{ option_value.option_value_id }}"
 									{% if showmore %}
 									<div class="button-toggle">
 								         <a class="showmore" data-toggle="collapse" href="#" aria-expanded="false" aria-controls="collapse-footer">
-								            <span class="toggle-more">{{ objlang.get('show_more') }} <i class="fa fa-angle-down"></i></span> 
-			 					            <span class="toggle-less">{{ objlang.get('show_less') }} <i class="fa fa-angle-up"></i></span>           
+								            <span class="toggle-less">{{ objlang.get('show_less') }} <i class="fa fa-angle-up"></i></span> 
+			 					            <span class="toggle-more">{{ objlang.get('show_more') }} <i class="fa fa-angle-down"></i></span>           
 										</a>        
 									</div>
 									{% endif %}
@@ -943,6 +942,7 @@ data-ov="{{ option_value.option_value_id }}"
     </div>
 </div>
 
+</script>
 <script type="text/javascript">
 <!--
 $('select[name=\'recurring_id\'], input[name="quantity"]').change(function(){
@@ -965,27 +965,6 @@ $('select[name=\'recurring_id\'], input[name="quantity"]').change(function(){
 	});
 });
 //--></script>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 <script type="text/javascript"><!--
 $('#button-cart1').on('click', function() {
@@ -1045,8 +1024,6 @@ $('#button-cart1').on('click', function() {
         }
 	});
 });
-
-
 //--></script> 
 <script type="text/javascript"><!--
 $('#button-cart').on('click', function() {
@@ -1106,8 +1083,6 @@ $('#button-cart').on('click', function() {
         }
 	});
 });
-
-
 //--></script> 
 
 <script type="text/javascript"><!--
