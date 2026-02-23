@@ -7,13 +7,15 @@
                 form="form-banggood-import"
                 data-toggle="tooltip"
                 title="{{ button_save }}"
-                class="btn btn-primary">
+                class="btn btn-primary"
+                data-lock-exempt="1">
           <i class="fa fa-save"></i>
         </button>
         <a href="{{ cancel }}"
            data-toggle="tooltip"
            title="{{ button_cancel }}"
-           class="btn btn-default">
+           class="btn btn-default"
+           data-lock-exempt="1">
           <i class="fa fa-reply"></i>
         </a>
       </div>
@@ -107,7 +109,7 @@
                 <label for="bg-fetch-count" class="text-muted" style="margin:0;font-size:12px;">Fetch</label>
                 <input id="bg-fetch-count" type="number" value="10" min="1" max="500" class="form-control input-sm" style="width:90px;" />
               </div>
-              <button id="btn-fetch-chunk" class="btn btn-default" title="Fetch next 10 products">
+              <button id="btn-fetch-chunk" class="btn btn-default" title="Fetch next 10 products" data-lock-exempt="1">
                 <i class="fa fa-download"></i> Fetch
               </button>
               <button id="btn-reset-fetch" class="btn btn-default" title="Reset fetch position (start from beginning)">
@@ -115,6 +117,9 @@
               </button>
               <button id="btn-clear-products" class="btn btn-default" title="Clear product list">
                 <i class="fa fa-times"></i> Clear
+              </button>
+              <button id="btn-lock-controls" class="btn btn-default" title="Lock/unlock controls" data-lock-exempt="1">
+                <i class="fa fa-lock"></i> Lock Controls
               </button>
             </div>
 
@@ -444,6 +449,11 @@
 {# Small CSS to ensure toggle icon size is stable on initial render and after JS replaces innerHTML.
    This is intentionally narrow-scoped to #banggood-categories to avoid affecting other admin UI. #}
 <style>
+  .bg-locked-link {
+    pointer-events: none;
+    opacity: 0.6;
+    cursor: default;
+  }
   /* Ensure toggle buttons and their icon spans are consistent size and alignment */
   #banggood-categories .bg-toggle {
     font-size: 14px;            /* consistent icon size */
@@ -499,6 +509,18 @@ var bgQueueLimit = 50;
 var bgQueueSort = 'status';
 // Process a small number in-browser after fetch (keeps UI responsive).
 var bgFetchOnly = false;
+var bgControlsLocked = false;
+try { bgControlsLocked = (localStorage.getItem('bgControlsLocked') === '1'); } catch(e) { bgControlsLocked = false; }
+
+function bgEscapeHtml(s) {
+  if (s === null || typeof s === 'undefined') return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 function bgCursorAlert(type, msg) {
   var cls = (type === 'success') ? 'alert-success' : (type === 'warning' ? 'alert-warning' : 'alert-danger');
@@ -507,6 +529,50 @@ function bgCursorAlert(type, msg) {
                '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
              '</div>';
   $('#content > .container-fluid').prepend(html);
+}
+
+function applyControlsLock() {
+  var locked = !!bgControlsLocked;
+  var $root = $('#content');
+  if (!$('#btn-lock-controls').length) return;
+
+  // Update lock button label/icon
+  try {
+    var $lockBtn = $('#btn-lock-controls');
+    if (locked) {
+      $lockBtn.html('<i class="fa fa-unlock"></i> Unlock Controls');
+    } else {
+      $lockBtn.html('<i class="fa fa-lock"></i> Lock Controls');
+    }
+  } catch(e) {}
+
+  // Lock/unlock buttons
+  $root.find('button, input[type="button"], input[type="submit"], a.btn').each(function(){
+    var $el = $(this);
+    if ($el.attr('data-lock-exempt') === '1') return;
+    if (locked) {
+      if ($el.is('button, input[type="button"], input[type="submit"]')) {
+        if (!$el.prop('disabled')) {
+          $el.attr('data-locked-by-toggle', '1');
+          $el.prop('disabled', true);
+        }
+      } else if ($el.is('a')) {
+        if ($el.attr('data-locked-by-toggle') !== '1') {
+          $el.attr('data-locked-by-toggle', '1');
+          $el.addClass('bg-locked-link').attr('aria-disabled', 'true');
+        }
+      }
+    } else {
+      if ($el.attr('data-locked-by-toggle') === '1') {
+        $el.removeAttr('data-locked-by-toggle');
+        if ($el.is('button, input[type="button"], input[type="submit"]')) {
+          $el.prop('disabled', false);
+        } else if ($el.is('a')) {
+          $el.removeClass('bg-locked-link').removeAttr('aria-disabled');
+        }
+      }
+    }
+  });
 }
 
 // Bind import-by-id buttons inside a container
@@ -987,6 +1053,7 @@ function loadProducts(cat_id, page) {
       });
 
       bindImportButtons($panel);
+      applyControlsLock();
     },
     error: function(xhr, status, err) {
       $panel.html('<div class="text-danger">AJAX error loading products: ' + err + '</div>');
@@ -1217,6 +1284,7 @@ $('#btn-fetch-updates').on('click', function(e){
         $panel.html('<div class="text-muted">No updates returned.</div>');
       }
       bindImportButtons($panel);
+      applyControlsLock();
     },
     error: function(xhr, status, err) {
       $panel.prepend('<div class="alert alert-danger">AJAX error: '+err+'</div>');
@@ -1317,6 +1385,71 @@ $(document).ready(function() {
     updateCronBannerExact(total, json.queue_pending, json.queue_processing, json.queue_imported, json.queue_updated, json.queue_error);
   }
 
+  function updateCursorHistoryFromJson(json) {
+    if (!json) return;
+    if (typeof json.fetch_cursor_history !== 'undefined') {
+      var list = json.fetch_cursor_history || [];
+      var html = '';
+      if (!list.length) {
+        html = '<div class="text-muted" style="font-size:12px;">No cursor history yet.</div>';
+      } else {
+        list.forEach(function(c){
+          html += '<div class="bg-cursor-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;">' +
+                    '<div style="min-width:0;">' +
+                      '<div style="font-size:11px;color:#777;">#' + bgEscapeHtml(c.id) + ' • ' + bgEscapeHtml(c.created_at || '') +
+                      (c.source ? (' • ' + bgEscapeHtml(c.source)) : '') + '</div>' +
+                      '<div style="font-size:12px;">cat=' + bgEscapeHtml(c.category_index) + ', page=' + bgEscapeHtml(c.page) + ', offset=' + bgEscapeHtml(c.offset) + '</div>' +
+                    '</div>' +
+                    '<button type="button" class="btn btn-xs btn-default bg-apply-fetch-cursor" data-id="' + bgEscapeHtml(c.id) + '">Use</button>' +
+                  '</div>';
+        });
+      }
+      if (typeof window.lastFetchCursorHistoryHtml === 'undefined' || window.lastFetchCursorHistoryHtml !== html) {
+        window.lastFetchCursorHistoryHtml = html;
+        $('#bg-fetch-cursor-history').html(html);
+      }
+    }
+
+    if (typeof json.update_cursor_history !== 'undefined') {
+      var list2 = json.update_cursor_history || [];
+      var html2 = '';
+      if (!list2.length) {
+        html2 = '<div class="text-muted" style="font-size:12px;">No cursor history yet.</div>';
+      } else {
+        list2.forEach(function(c){
+          html2 += '<div class="bg-cursor-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;">' +
+                     '<div style="min-width:0;">' +
+                       '<div style="font-size:11px;color:#777;">#' + bgEscapeHtml(c.id) + ' • ' + bgEscapeHtml(c.created_at || '') +
+                       (c.source ? (' • ' + bgEscapeHtml(c.source)) : '') + '</div>' +
+                       '<div style="font-size:12px;">minutes=' + bgEscapeHtml(c.minutes) + ', page=' + bgEscapeHtml(c.page) + '</div>' +
+                     '</div>' +
+                     '<button type="button" class="btn btn-xs btn-default bg-apply-update-cursor" data-id="' + bgEscapeHtml(c.id) + '">Use</button>' +
+                   '</div>';
+        });
+      }
+      if (typeof window.lastUpdateCursorHistoryHtml === 'undefined' || window.lastUpdateCursorHistoryHtml !== html2) {
+        window.lastUpdateCursorHistoryHtml = html2;
+        $('#bg-update-cursor-history').html(html2);
+      }
+    }
+
+    if (json.update_cursor) {
+      try {
+        if (!$('#bg-update-minutes').is(':focus') && typeof json.update_cursor.minutes !== 'undefined') {
+          $('#bg-update-minutes').val(parseInt(json.update_cursor.minutes, 10) || 30);
+        }
+      } catch(e) {}
+      try {
+        if (!$('#bg-update-page').is(':focus') && typeof json.update_cursor.page !== 'undefined') {
+          $('#bg-update-page').val(parseInt(json.update_cursor.page, 10) || 1);
+        }
+      } catch(e) {}
+    }
+
+    // Re-apply lock state to new buttons
+    applyControlsLock();
+  }
+
   function syncQueuePagerUi(page, pageTotal) {
     page = parseInt(page, 10); if (!page || page < 1) page = 1;
     pageTotal = parseInt(pageTotal, 10); if (!pageTotal || pageTotal < 1) pageTotal = 1;
@@ -1356,6 +1489,7 @@ $(document).ready(function() {
         }
         // Always update banner from server-provided global counts (even if HTML unchanged).
         updateCronBannerFromJson(json);
+        updateCursorHistoryFromJson(json);
       },
       complete: function() {
         bgQueueRefreshInFlight = false;
@@ -1400,6 +1534,20 @@ $(document).ready(function() {
     bgQueuePage = 1;
     bgProductsMode = 'persisted';
     refreshPersistedQueueOnce();
+  });
+
+  // Lock/unlock controls
+  $('#btn-lock-controls').on('click', function(e){
+    e.preventDefault();
+    bgControlsLocked = !bgControlsLocked;
+    try { localStorage.setItem('bgControlsLocked', bgControlsLocked ? '1' : '0'); } catch(e) {}
+    applyControlsLock();
+  });
+
+  // Prevent clicks on locked links
+  $(document).on('click', 'a.bg-locked-link', function(e){
+    e.preventDefault();
+    return false;
   });
 
   // Apply saved cursor history entries
@@ -1471,5 +1619,7 @@ $(document).ready(function() {
   bgQueueRefreshTimer = setInterval(refreshPersistedQueueOnce, 1000);
   // Also do a single refresh shortly after page load.
   setTimeout(refreshPersistedQueueOnce, 500);
+  // Apply lock state on initial load.
+  applyControlsLock();
 });
 </script>

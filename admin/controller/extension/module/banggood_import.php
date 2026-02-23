@@ -1456,6 +1456,7 @@ HTML;
      */
     public function getFetchedProductsListPaged() {
         $this->load->language('extension/module/banggood_import');
+        $this->load->model('extension/module/banggood_import');
 
         $this->response->addHeader('Content-Type: application/json');
         $json = array();
@@ -1511,6 +1512,32 @@ HTML;
                 $json['queue_total'] = isset($st['total']) ? (int)$st['total'] : 0;
             } catch (\Throwable $e) {
                 // Non-fatal; banner can fall back to existing values.
+            }
+
+            // Cursor history (last 10)
+            try {
+                $json['fetch_cursor_history'] = $this->model_extension_module_banggood_import->getFetchCursorHistory(10);
+            } catch (\Throwable $e) {
+                $json['fetch_cursor_history'] = array();
+            }
+            try {
+                $json['update_cursor_history'] = $this->model_extension_module_banggood_import->getUpdateCursorHistory(10);
+            } catch (\Throwable $e) {
+                $json['update_cursor_history'] = array();
+            }
+            try {
+                $ucRaw = $this->config->get('module_banggood_import_update_cursor');
+                $uc = array('minutes' => 30, 'page' => 1);
+                if (is_string($ucRaw) && $ucRaw !== '') {
+                    $decoded = @json_decode($ucRaw, true);
+                    if (is_array($decoded)) {
+                        if (isset($decoded['minutes'])) $uc['minutes'] = max(1, (int)$decoded['minutes']);
+                        if (isset($decoded['page'])) $uc['page'] = max(1, (int)$decoded['page']);
+                    }
+                }
+                $json['update_cursor'] = $uc;
+            } catch (\Throwable $e) {
+                $json['update_cursor'] = array('minutes' => 30, 'page' => 1);
             }
 
             $qc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "`");
