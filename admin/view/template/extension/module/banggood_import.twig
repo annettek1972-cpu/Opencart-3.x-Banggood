@@ -99,8 +99,6 @@
               <div style="display:flex;align-items:center;gap:6px;margin-right:auto;flex-wrap:wrap;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
                 <input id="bg-update-minutes" type="number" value="{{ bg_update_cursor_minutes|default(30) }}" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
-                <label for="bg-update-page" class="text-muted" style="margin:0 0 0 8px;font-size:12px;">Page</label>
-                <input id="bg-update-page" type="number" value="{{ bg_update_cursor_page|default(1) }}" min="1" class="form-control input-sm" style="width:80px;" />
                 <button id="btn-fetch-updates" class="btn btn-default" title="{{ button_fetch_updates|default('Fetch Updates') }}">
                   <i class="fa fa-clock-o"></i> {{ button_fetch_updates|default('Fetch Updates') }}
                 </button>
@@ -121,6 +119,46 @@
               <button id="btn-lock-controls" class="btn btn-default" title="Lock/unlock controls" data-lock-exempt="1">
                 <i class="fa fa-lock"></i> Lock Controls
               </button>
+            </div>
+
+            <div class="well" style="min-height:200px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <h4 style="margin:0;">
+                  Product
+                  <small id="bg-persisted-count" class="text-muted" style="margin-left:8px;">
+                    ({{ bg_fetched_products_count|default(0) }})
+                  </small>
+                </h4>
+                <div id="bg-queue-pager" style="display:flex;align-items:center;gap:6px;">
+                  <button type="button" id="bg-queue-prev" class="btn btn-default btn-xs" title="Previous page" style="min-width:60px;">Prev</button>
+                  <span class="text-muted" style="font-size:12px;white-space:nowrap;">
+                    Page <span id="bg-queue-page">1</span>/<span id="bg-queue-page-total">1</span>
+                  </span>
+                  <button type="button" id="bg-queue-next" class="btn btn-default btn-xs" title="Next page" style="min-width:60px;">Next</button>
+                  <select id="bg-queue-sort" class="form-control input-sm" style="width:130px;height:24px;padding:2px 6px;" title="Sort order">
+                    <option value="status" selected="selected">Sort: Status</option>
+                    <option value="newest">Sort: Newest</option>
+                    <option value="pending">Sort: Pending</option>
+                    <option value="processing">Sort: Processing</option>
+                    <option value="updated">Sort: Updated</option>
+                    <option value="imported">Sort: Imported</option>
+                    <option value="error">Sort: Error</option>
+                  </select>
+                  <select id="bg-queue-limit" class="form-control input-sm" style="width:90px;height:24px;padding:2px 6px;" title="Rows per page">
+                    <option value="25">25</option>
+                    <option value="50" selected="selected">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="banggood-products" aria-live="polite" style="margin-top:12px;">
+                {% if bg_fetched_products_html %}
+                  {{ bg_fetched_products_html|raw }}
+                {% else %}
+                  <!-- product list will be loaded here -->
+                {% endif %}
+              </div>
             </div>
 
             <div class="well" id="bg-cursor-history" style="margin-bottom:10px;">
@@ -168,46 +206,6 @@
                     {% endif %}
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div class="well" style="min-height:200px;">
-              <div style="display:flex;align-items:center;justify-content:space-between;">
-                <h4 style="margin:0;">
-                  Product
-                  <small id="bg-persisted-count" class="text-muted" style="margin-left:8px;">
-                    ({{ bg_fetched_products_count|default(0) }})
-                  </small>
-                </h4>
-                <div id="bg-queue-pager" style="display:flex;align-items:center;gap:6px;">
-                  <button type="button" id="bg-queue-prev" class="btn btn-default btn-xs" title="Previous page" style="min-width:60px;">Prev</button>
-                  <span class="text-muted" style="font-size:12px;white-space:nowrap;">
-                    Page <span id="bg-queue-page">1</span>/<span id="bg-queue-page-total">1</span>
-                  </span>
-                  <button type="button" id="bg-queue-next" class="btn btn-default btn-xs" title="Next page" style="min-width:60px;">Next</button>
-                  <select id="bg-queue-sort" class="form-control input-sm" style="width:130px;height:24px;padding:2px 6px;" title="Sort order">
-                    <option value="status" selected="selected">Sort: Status</option>
-                    <option value="newest">Sort: Newest</option>
-                    <option value="pending">Sort: Pending</option>
-                    <option value="processing">Sort: Processing</option>
-                    <option value="updated">Sort: Updated</option>
-                    <option value="imported">Sort: Imported</option>
-                    <option value="error">Sort: Error</option>
-                  </select>
-                  <select id="bg-queue-limit" class="form-control input-sm" style="width:90px;height:24px;padding:2px 6px;" title="Rows per page">
-                    <option value="25">25</option>
-                    <option value="50" selected="selected">50</option>
-                    <option value="100">100</option>
-                  </select>
-                </div>
-              </div>
-
-              <div id="banggood-products" aria-live="polite" style="margin-top:12px;">
-                {% if bg_fetched_products_html %}
-                  {{ bg_fetched_products_html|raw }}
-                {% else %}
-                  <!-- product list will be loaded here -->
-                {% endif %}
               </div>
             </div>
           </div>
@@ -1260,8 +1258,6 @@ $('#btn-fetch-updates').on('click', function(e){
 
   var minutes = parseInt($('#bg-update-minutes').val(), 10);
   if (!minutes || minutes < 1) minutes = 30;
-  var page = parseInt($('#bg-update-page').val(), 10);
-  if (!page || page < 1) page = 1;
 
   $btn.prop('disabled', true);
   var old = $btn.html();
@@ -1271,7 +1267,7 @@ $('#btn-fetch-updates').on('click', function(e){
     url: fetchUpdatesUrl,
     type: 'post',
     dataType: 'json',
-    data: { minutes: minutes, page: page },
+    data: { minutes: minutes },
     success: function(json) {
       if (json && json.error) {
         $panel.prepend('<div class="alert alert-danger">'+ json.error +'</div>');
@@ -1439,11 +1435,6 @@ $(document).ready(function() {
           $('#bg-update-minutes').val(parseInt(json.update_cursor.minutes, 10) || 30);
         }
       } catch(e) {}
-      try {
-        if (!$('#bg-update-page').is(':focus') && typeof json.update_cursor.page !== 'undefined') {
-          $('#bg-update-page').val(parseInt(json.update_cursor.page, 10) || 1);
-        }
-      } catch(e) {}
     }
 
     // Re-apply lock state to new buttons
@@ -1598,7 +1589,6 @@ $(document).ready(function() {
         }
         if (json && json.cursor) {
           try { $('#bg-update-minutes').val(json.cursor.minutes || 30); } catch(e) {}
-          try { $('#bg-update-page').val(json.cursor.page || 1); } catch(e) {}
         }
         bgCursorAlert('success', (json && json.success) ? json.success : 'Update cursor updated.');
       },
