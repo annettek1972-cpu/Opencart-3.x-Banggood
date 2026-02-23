@@ -950,10 +950,12 @@ $('#btn-fetch-chunk').on('click', function(e){
   // Clear existing pending/processing FIRST (do not fetch new IDs until backlog is cleared).
   var maxCycles = count; // process up to the requested count
   var cyclesDone = 0;
+  var noProgressCycles = 0;
 
   function finish() {
     $btn.prop('disabled', false);
     $btn.html('<i class="fa fa-download"></i> Fetch');
+    noProgressCycles = 0;
   }
 
   function fetchChunkOnly() {
@@ -964,6 +966,11 @@ $('#btn-fetch-chunk').on('click', function(e){
       dataType: 'json',
       data: { chunk_size: count },
       success: function(json) {
+        if (json && json.skip_fetch) {
+          var msg = json.message || 'Pending items exist. Processing queue before fetching new products.';
+          $panel.html('<div class="alert alert-warning">'+ msg +'</div>');
+          return;
+        }
         if (json.error) {
           $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
           return;
@@ -998,6 +1005,12 @@ $('#btn-fetch-chunk').on('click', function(e){
       dataType: 'json',
       data: { limit: 1 },
       success: function(pjson) {
+        if (pjson && pjson.access_restricted) {
+          var amsg = pjson.access_restricted_message || 'Access restricted. Please retry later.';
+          $panel.prepend('<div class="alert alert-danger">Import error: ' + amsg + '</div>');
+          finish();
+          return;
+        }
         if (pjson && pjson.error) {
           $panel.prepend('<div class="alert alert-danger">Import error: ' + pjson.error + '</div>');
           finish();
@@ -1006,11 +1019,14 @@ $('#btn-fetch-chunk').on('click', function(e){
 
         var processed = 0;
         try { processed = parseInt(pjson && pjson.processed, 10) || 0; } catch(e) { processed = 0; }
+        var pendingRemain = 0;
+        try { pendingRemain = parseInt(pjson && pjson.queue_pending, 10) || 0; } catch(e) { pendingRemain = 0; }
 
         // Refresh list UI
         try { if (typeof refreshPersistedQueueOnce === 'function') refreshPersistedQueueOnce(); } catch(e) {}
 
         if (processed > 0) {
+          noProgressCycles = 0;
           cyclesDone++;
           if (cyclesDone < maxCycles) {
             // continue draining
@@ -1022,8 +1038,20 @@ $('#btn-fetch-chunk').on('click', function(e){
           return;
         }
 
-        // No backlog pending to process.
+        if (pendingRemain > 0) {
+          noProgressCycles++;
+          if (noProgressCycles < 3) {
+            // pending still exists; keep trying to drain before fetching
+            setTimeout(drainQueueOnce, 500);
+            return;
+          }
+          $panel.prepend('<div class="alert alert-warning">Pending items remain but none were processed. Please check errors or retry later.</div>');
+          finish();
+          return;
+        }
+
         // Backlog empty -> now fetch next chunk
+        noProgressCycles = 0;
         $btn.html('<i class="fa fa-spinner fa-spin"></i> Fetching...');
         $.ajax({
           url: fetchChunkUrl,
@@ -1031,8 +1059,21 @@ $('#btn-fetch-chunk').on('click', function(e){
           dataType: 'json',
           data: { chunk_size: count },
           success: function(json) {
+            if (json && json.skip_fetch) {
+              var msg = json.message || 'Pending items exist. Processing queue before fetching new products.';
+              $panel.prepend('<div class="alert alert-warning">'+ msg +'</div>');
+              noProgressCycles++;
+              if (noProgressCycles < 3) {
+                $btn.html('<i class="fa fa-spinner fa-spin"></i> Processing queue...');
+                setTimeout(drainQueueOnce, 500);
+                return;
+              }
+              finish();
+              return;
+            }
             if (json.error) {
               $panel.html('<div class="alert alert-danger">'+ json.error +'</div>');
+              finish();
               return;
             }
             if (typeof json.imported !== 'undefined' || typeof json.import_errors !== 'undefined') {

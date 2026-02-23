@@ -2089,8 +2089,9 @@ HTML;
                         $pc = $this->db->query("SELECT COUNT(*) AS cnt FROM `" . $tbl . "` WHERE " . $pendingWhere)->row;
                         $pendingCount = isset($pc['cnt']) ? (int)$pc['cnt'] : 0;
                         if ($pendingCount > 0) {
-                            $json['error'] = 'Pending items exist. Process pending items before fetching new products.';
+                            $json['skip_fetch'] = 1;
                             $json['pending'] = $pendingCount;
+                            $json['message'] = 'Pending items exist. Processing queue before fetching new products.';
                             $this->response->setOutput(json_encode($json));
                             return;
                         }
@@ -2578,6 +2579,30 @@ HTML;
                     }
                     $results['processed']++;
                 }
+            }
+
+            // Return queue counts so the UI can decide whether to fetch or keep draining.
+            try {
+                $tbl = $this->getFetchedProductsTableName();
+                $q = $this->db->query("SHOW TABLES LIKE '" . $this->db->escape($tbl) . "'");
+                if ($q && $q->num_rows) {
+                    $st = $this->db->query("SELECT
+                        SUM(CASE WHEN `status` IS NULL OR TRIM(`status`) = '' OR LOWER(TRIM(`status`)) = 'pending' THEN 1 ELSE 0 END) AS pending,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'processing' THEN 1 ELSE 0 END) AS processing,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) IN ('imported','updated') THEN 1 ELSE 0 END) AS imported,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'updated' THEN 1 ELSE 0 END) AS updated,
+                        SUM(CASE WHEN LOWER(TRIM(`status`)) = 'error' THEN 1 ELSE 0 END) AS error,
+                        COUNT(*) AS total
+                        FROM `" . $tbl . "`")->row;
+                    $results['queue_pending'] = isset($st['pending']) ? (int)$st['pending'] : 0;
+                    $results['queue_processing'] = isset($st['processing']) ? (int)$st['processing'] : 0;
+                    $results['queue_imported'] = isset($st['imported']) ? (int)$st['imported'] : 0;
+                    $results['queue_updated'] = isset($st['updated']) ? (int)$st['updated'] : 0;
+                    $results['queue_error'] = isset($st['error']) ? (int)$st['error'] : 0;
+                    $results['queue_total'] = isset($st['total']) ? (int)$st['total'] : 0;
+                }
+            } catch (\Throwable $e) {
+                // ignore; queue counts are optional
             }
 
             try { @ob_end_clean(); } catch (\Throwable $e) { try { @ob_clean(); @ob_end_clean(); } catch (\Throwable $x) {} }
