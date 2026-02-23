@@ -655,6 +655,14 @@ try {
         $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
         $settingModel->editSetting('module_banggood_import', $cur);
     }
+    try {
+        if (method_exists($bgModel, 'saveFetchCursorHistory')) {
+            $bgModel->saveFetchCursorHistory(
+                ['category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset],
+                'cron'
+            );
+        }
+    } catch (Throwable $e) {}
 
     echo "Fetched=" . count($collected) .
          " Persisted=" . $persisted .

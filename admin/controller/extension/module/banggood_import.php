@@ -541,6 +541,34 @@ class ControllerExtensionModuleBanggoodImport extends Controller {
             }
         } catch (\Throwable $e) {}
 
+        // Cursor history (last 10 entries)
+        $data['bg_fetch_cursor_history'] = array();
+        $data['bg_update_cursor_history'] = array();
+        try {
+            $data['bg_fetch_cursor_history'] = $this->model_extension_module_banggood_import->getFetchCursorHistory(10);
+        } catch (\Throwable $e) {
+            $data['bg_fetch_cursor_history'] = array();
+        }
+        try {
+            $data['bg_update_cursor_history'] = $this->model_extension_module_banggood_import->getUpdateCursorHistory(10);
+        } catch (\Throwable $e) {
+            $data['bg_update_cursor_history'] = array();
+        }
+
+        // Update cursor defaults (for Fetch Updates)
+        $data['bg_update_cursor_minutes'] = 30;
+        $data['bg_update_cursor_page'] = 1;
+        try {
+            $ucRaw = $this->config->get('module_banggood_import_update_cursor');
+            if (is_string($ucRaw) && $ucRaw !== '') {
+                $uc = @json_decode($ucRaw, true);
+                if (is_array($uc)) {
+                    if (isset($uc['minutes'])) $data['bg_update_cursor_minutes'] = max(1, (int)$uc['minutes']);
+                    if (isset($uc['page'])) $data['bg_update_cursor_page'] = max(1, (int)$uc['page']);
+                }
+            }
+        } catch (\Throwable $e) {}
+
         // Expose update URL for JS (clean URL generation)
         $data['update_categories_url'] = $this->url->link(
             'extension/module/banggood_import/updateCategories',
@@ -1271,6 +1299,7 @@ HTML;
     public function getProductUpdateList() {
         $this->load->language('extension/module/banggood_import');
         $this->load->model('extension/module/banggood_import');
+        $this->load->model('setting/setting');
 
         $this->response->addHeader('Content-Type: application/json');
         $json = array();
@@ -1284,8 +1313,21 @@ HTML;
                 return;
             }
 
-            $minutes = isset($this->request->post['minutes']) ? (int)$this->request->post['minutes'] : 30;
-            $page = isset($this->request->post['page']) ? max(1, (int)$this->request->post['page']) : 1;
+            $storedCursor = array('minutes' => 30, 'page' => 1);
+            try {
+                $ucRaw = $this->config->get('module_banggood_import_update_cursor');
+                if (is_string($ucRaw) && $ucRaw !== '') {
+                    $uc = @json_decode($ucRaw, true);
+                    if (is_array($uc)) {
+                        if (isset($uc['minutes'])) $storedCursor['minutes'] = max(1, (int)$uc['minutes']);
+                        if (isset($uc['page'])) $storedCursor['page'] = max(1, (int)$uc['page']);
+                    }
+                }
+            } catch (\Throwable $e) {}
+
+            $minutes = isset($this->request->post['minutes']) ? (int)$this->request->post['minutes'] : (int)$storedCursor['minutes'];
+            if ($minutes < 1) $minutes = 1;
+            $page = isset($this->request->post['page']) ? max(1, (int)$this->request->post['page']) : (int)$storedCursor['page'];
             $persist = !isset($this->request->post['persist']) || (int)$this->request->post['persist'] !== 0;
 
             $res = $this->model_extension_module_banggood_import->fetchProductUpdateList($minutes, $page);
@@ -1350,6 +1392,18 @@ HTML;
             $json['page_total'] = isset($res['page_total']) ? (int)$res['page_total'] : 0;
             $json['html'] = $html;
             $json['persisted'] = (int)$persisted;
+            try {
+                $cursorNew = json_encode(array('minutes' => (int)$minutes, 'page' => (int)$page));
+                if (method_exists($this->model_setting_setting, 'editSettingValue')) {
+                    $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_update_cursor', $cursorNew);
+                } else {
+                    $cur = $this->model_setting_setting->getSetting('module_banggood_import');
+                    if (!is_array($cur)) $cur = array();
+                    $cur['module_banggood_import_update_cursor'] = $cursorNew;
+                    $this->model_setting_setting->editSetting('module_banggood_import', $cur);
+                }
+                $this->model_extension_module_banggood_import->saveUpdateCursorHistory($minutes, $page, 'admin');
+            } catch (\Throwable $e) {}
             $this->response->setOutput(json_encode($json));
         } catch (\Throwable $e) {
             $json['error'] = 'getProductUpdateList failed: ' . $e->getMessage();
@@ -2293,6 +2347,12 @@ HTML;
                     $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
                     $this->model_setting_setting->editSetting('module_banggood_import', $cur);
                 }
+                try {
+                    $this->model_extension_module_banggood_import->saveFetchCursorHistory(
+                        array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset),
+                        'admin'
+                    );
+                } catch (\Throwable $e) {}
 
                 $json['error'] = 'Fetch failed: ' . $fetch_error;
                 $json['persisted'] = (int)$persisted;
@@ -2330,6 +2390,12 @@ HTML;
             } catch (\Throwable $e) {
                 // non-fatal
             }
+            try {
+                $this->model_extension_module_banggood_import->saveFetchCursorHistory(
+                    array('category_index' => (int)$next_category_index, 'page' => (int)$next_page, 'offset' => (int)$next_offset),
+                    'admin'
+                );
+            } catch (\Throwable $e) {}
 
             // IMPORTANT: return the list strictly from bg_fetched_products so the UI matches DB.
             list($html, $recent_count, $total_count) = $this->renderFetchedProductsList(200);
@@ -2398,6 +2464,121 @@ HTML;
             $json['cursor'] = array('category_index' => 0, 'page' => 1, 'offset' => 0);
         } catch (\Throwable $e) {
             $json['error'] = 'resetFetchCursor failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: setFetchCursorFromHistory
+     * Sets the fetch cursor using a saved history entry.
+     */
+    public function setFetchCursorFromHistory() {
+        $this->load->language('extension/module/banggood_import');
+        $this->load->model('extension/module/banggood_import');
+        $this->load->model('setting/setting');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $id = isset($this->request->post['id']) ? (int)$this->request->post['id'] : 0;
+            if ($id < 1) {
+                $json['error'] = 'id is required';
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $row = $this->model_extension_module_banggood_import->getFetchCursorHistoryById($id);
+            if (!$row) {
+                $json['error'] = 'Cursor history entry not found';
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $cursor = array(
+                'category_index' => isset($row['category_index']) ? max(0, (int)$row['category_index']) : 0,
+                'page' => isset($row['page']) ? max(1, (int)$row['page']) : 1,
+                'offset' => isset($row['offset']) ? max(0, (int)$row['offset']) : 0
+            );
+            $cursorNew = json_encode($cursor);
+
+            if (method_exists($this->model_setting_setting, 'editSettingValue')) {
+                $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_fetch_cursor', $cursorNew);
+            } else {
+                $cur = $this->model_setting_setting->getSetting('module_banggood_import');
+                if (!is_array($cur)) $cur = array();
+                $cur['module_banggood_import_fetch_cursor'] = $cursorNew;
+                $this->model_setting_setting->editSetting('module_banggood_import', $cur);
+            }
+
+            $json['success'] = 'Fetch cursor set to saved entry.';
+            $json['cursor'] = $cursor;
+        } catch (\Throwable $e) {
+            $json['error'] = 'setFetchCursorFromHistory failed: ' . $e->getMessage();
+        }
+
+        $this->response->setOutput(json_encode($json));
+    }
+
+    /**
+     * AJAX: setUpdateCursorFromHistory
+     * Sets the update cursor using a saved history entry.
+     */
+    public function setUpdateCursorFromHistory() {
+        $this->load->language('extension/module/banggood_import');
+        $this->load->model('extension/module/banggood_import');
+        $this->load->model('setting/setting');
+
+        $this->response->addHeader('Content-Type: application/json');
+        $json = array();
+
+        try {
+            if (!$this->user->hasPermission('modify', 'extension/module/banggood_import')) {
+                $json['error'] = $this->language->get('error_permission');
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $id = isset($this->request->post['id']) ? (int)$this->request->post['id'] : 0;
+            if ($id < 1) {
+                $json['error'] = 'id is required';
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $row = $this->model_extension_module_banggood_import->getUpdateCursorHistoryById($id);
+            if (!$row) {
+                $json['error'] = 'Update cursor history entry not found';
+                $this->response->setOutput(json_encode($json));
+                return;
+            }
+
+            $cursor = array(
+                'minutes' => isset($row['minutes']) ? max(1, (int)$row['minutes']) : 30,
+                'page' => isset($row['page']) ? max(1, (int)$row['page']) : 1
+            );
+            $cursorNew = json_encode($cursor);
+
+            if (method_exists($this->model_setting_setting, 'editSettingValue')) {
+                $this->model_setting_setting->editSettingValue('module_banggood_import', 'module_banggood_import_update_cursor', $cursorNew);
+            } else {
+                $cur = $this->model_setting_setting->getSetting('module_banggood_import');
+                if (!is_array($cur)) $cur = array();
+                $cur['module_banggood_import_update_cursor'] = $cursorNew;
+                $this->model_setting_setting->editSetting('module_banggood_import', $cur);
+            }
+
+            $json['success'] = 'Update cursor set to saved entry.';
+            $json['cursor'] = $cursor;
+        } catch (\Throwable $e) {
+            $json['error'] = 'setUpdateCursorFromHistory failed: ' . $e->getMessage();
         }
 
         $this->response->setOutput(json_encode($json));

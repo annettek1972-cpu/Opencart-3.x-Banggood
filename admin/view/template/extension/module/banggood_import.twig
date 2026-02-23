@@ -94,9 +94,11 @@
             </div>
 
             <div style="margin-bottom:10px; display:flex; justify-content:flex-end; gap:8px; align-items:center;">
-              <div style="display:flex;align-items:center;gap:6px;margin-right:auto;">
+              <div style="display:flex;align-items:center;gap:6px;margin-right:auto;flex-wrap:wrap;">
                 <label for="bg-update-minutes" class="text-muted" style="margin:0;font-size:12px;">{{ entry_update_minutes|default('Updated in last (minutes)') }}</label>
-                <input id="bg-update-minutes" type="number" value="30" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
+                <input id="bg-update-minutes" type="number" value="{{ bg_update_cursor_minutes|default(30) }}" min="1" max="21600" class="form-control input-sm" style="width:120px;" />
+                <label for="bg-update-page" class="text-muted" style="margin:0 0 0 8px;font-size:12px;">Page</label>
+                <input id="bg-update-page" type="number" value="{{ bg_update_cursor_page|default(1) }}" min="1" class="form-control input-sm" style="width:80px;" />
                 <button id="btn-fetch-updates" class="btn btn-default" title="{{ button_fetch_updates|default('Fetch Updates') }}">
                   <i class="fa fa-clock-o"></i> {{ button_fetch_updates|default('Fetch Updates') }}
                 </button>
@@ -114,6 +116,54 @@
               <button id="btn-clear-products" class="btn btn-default" title="Clear product list">
                 <i class="fa fa-times"></i> Clear
               </button>
+            </div>
+
+            <div class="well" id="bg-cursor-history" style="margin-bottom:10px;">
+              <div style="font-weight:600;margin-bottom:6px;">Cursor history (last 10)</div>
+              <div class="row">
+                <div class="col-sm-6">
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;">New imports (Fetch)</div>
+                  <div id="bg-fetch-cursor-history">
+                    {% if bg_fetch_cursor_history and bg_fetch_cursor_history|length %}
+                      {% for c in bg_fetch_cursor_history %}
+                        <div class="bg-cursor-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;">
+                          <div style="min-width:0;">
+                            <div style="font-size:11px;color:#777;">
+                              #{{ c.id }} • {{ c.created_at }}
+                              {% if c.source is defined and c.source %} • {{ c.source }}{% endif %}
+                            </div>
+                            <div style="font-size:12px;">cat={{ c.category_index }}, page={{ c.page }}, offset={{ c.offset }}</div>
+                          </div>
+                          <button type="button" class="btn btn-xs btn-default bg-apply-fetch-cursor" data-id="{{ c.id }}">Use</button>
+                        </div>
+                      {% endfor %}
+                    {% else %}
+                      <div class="text-muted" style="font-size:12px;">No cursor history yet.</div>
+                    {% endif %}
+                  </div>
+                </div>
+                <div class="col-sm-6">
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;">Updated products (Fetch Updates)</div>
+                  <div id="bg-update-cursor-history">
+                    {% if bg_update_cursor_history and bg_update_cursor_history|length %}
+                      {% for c in bg_update_cursor_history %}
+                        <div class="bg-cursor-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;">
+                          <div style="min-width:0;">
+                            <div style="font-size:11px;color:#777;">
+                              #{{ c.id }} • {{ c.created_at }}
+                              {% if c.source is defined and c.source %} • {{ c.source }}{% endif %}
+                            </div>
+                            <div style="font-size:12px;">minutes={{ c.minutes }}, page={{ c.page }}</div>
+                          </div>
+                          <button type="button" class="btn btn-xs btn-default bg-apply-update-cursor" data-id="{{ c.id }}">Use</button>
+                        </div>
+                      {% endfor %}
+                    {% else %}
+                      <div class="text-muted" style="font-size:12px;">No cursor history yet.</div>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="well" style="min-height:200px;">
@@ -437,6 +487,8 @@ var processFetchedUrl = '{{ ('index.php?route=extension/module/banggood_import/p
 var importProductByIdUrl = '{{ ('index.php?route=extension/module/banggood_import/importProductById&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsList&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 var getFetchedProductsListPagedUrl = '{{ ('index.php?route=extension/module/banggood_import/getFetchedProductsListPaged&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var setFetchCursorHistoryUrl = '{{ ('index.php?route=extension/module/banggood_import/setFetchCursorFromHistory&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
+var setUpdateCursorHistoryUrl = '{{ ('index.php?route=extension/module/banggood_import/setUpdateCursorFromHistory&user_token=' ~ user_token) | raw }}'.replace(/&amp;/g, '&');
 
 // Track what the Products panel is showing so we only auto-refresh the persisted queue view.
 var bgProductsMode = 'persisted'; // 'persisted' | 'category' | 'updates' | 'other'
@@ -447,6 +499,15 @@ var bgQueueLimit = 50;
 var bgQueueSort = 'status';
 // Process a small number in-browser after fetch (keeps UI responsive).
 var bgFetchOnly = false;
+
+function bgCursorAlert(type, msg) {
+  var cls = (type === 'success') ? 'alert-success' : (type === 'warning' ? 'alert-warning' : 'alert-danger');
+  var html = '<div class="alert ' + cls + ' alert-dismissible">' +
+               '<i class="fa fa-info-circle"></i> ' + msg +
+               '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+             '</div>';
+  $('#content > .container-fluid').prepend(html);
+}
 
 // Bind import-by-id buttons inside a container
 function bindImportButtons($container) {
@@ -1132,6 +1193,8 @@ $('#btn-fetch-updates').on('click', function(e){
 
   var minutes = parseInt($('#bg-update-minutes').val(), 10);
   if (!minutes || minutes < 1) minutes = 30;
+  var page = parseInt($('#bg-update-page').val(), 10);
+  if (!page || page < 1) page = 1;
 
   $btn.prop('disabled', true);
   var old = $btn.html();
@@ -1141,7 +1204,7 @@ $('#btn-fetch-updates').on('click', function(e){
     url: fetchUpdatesUrl,
     type: 'post',
     dataType: 'json',
-    data: { minutes: minutes, page: 1 },
+    data: { minutes: minutes, page: page },
     success: function(json) {
       if (json && json.error) {
         $panel.prepend('<div class="alert alert-danger">'+ json.error +'</div>');
@@ -1337,6 +1400,67 @@ $(document).ready(function() {
     bgQueuePage = 1;
     bgProductsMode = 'persisted';
     refreshPersistedQueueOnce();
+  });
+
+  // Apply saved cursor history entries
+  $(document).off('click', '.bg-apply-fetch-cursor').on('click', '.bg-apply-fetch-cursor', function(e){
+    e.preventDefault();
+    var id = $(this).data('id') || $(this).attr('data-id');
+    if (!id) return;
+    var $btn = $(this);
+    var old = $btn.text();
+    $btn.prop('disabled', true).text('...');
+    $.ajax({
+      url: setFetchCursorHistoryUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { id: id },
+      success: function(json) {
+        if (json && json.error) {
+          bgCursorAlert('error', json.error);
+          return;
+        }
+        bgCursorAlert('success', (json && json.success) ? json.success : 'Fetch cursor updated.');
+      },
+      error: function(xhr, status, err) {
+        bgCursorAlert('error', 'Cursor update failed: ' + (err || status));
+      },
+      complete: function() {
+        $btn.prop('disabled', false).text(old);
+      }
+    });
+  });
+
+  $(document).off('click', '.bg-apply-update-cursor').on('click', '.bg-apply-update-cursor', function(e){
+    e.preventDefault();
+    var id = $(this).data('id') || $(this).attr('data-id');
+    if (!id) return;
+    var $btn = $(this);
+    var old = $btn.text();
+    $btn.prop('disabled', true).text('...');
+    $.ajax({
+      url: setUpdateCursorHistoryUrl,
+      type: 'post',
+      dataType: 'json',
+      data: { id: id },
+      success: function(json) {
+        if (json && json.error) {
+          bgCursorAlert('error', json.error);
+          return;
+        }
+        if (json && json.cursor) {
+          try { $('#bg-update-minutes').val(json.cursor.minutes || 30); } catch(e) {}
+          try { $('#bg-update-page').val(json.cursor.page || 1); } catch(e) {}
+        }
+        bgCursorAlert('success', (json && json.success) ? json.success : 'Update cursor updated.');
+      },
+      error: function(xhr, status, err) {
+        bgCursorAlert('error', 'Cursor update failed: ' + (err || status));
+      },
+      complete: function() {
+        $btn.prop('disabled', false).text(old);
+      }
+    });
   });
   // Initialize limit selector to our default
   try { $('#bg-queue-limit').val(String(bgQueueLimit)); } catch(e) {}

@@ -760,6 +760,130 @@ public function fetchProductList($cat_id, $page = 1, $page_size = 10, $filters =
     }
 
     /**
+     * Ensure cursor history tables exist.
+     */
+    protected function ensureFetchCursorHistoryTableExists() {
+        $tbl = DB_PREFIX . 'bg_fetch_cursor_history';
+        $this->db->query("CREATE TABLE IF NOT EXISTS `" . $tbl . "` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `cursor_json` text NOT NULL,
+            `category_index` int(11) NOT NULL DEFAULT 0,
+            `page` int(11) NOT NULL DEFAULT 1,
+            `offset` int(11) NOT NULL DEFAULT 0,
+            `source` varchar(16) DEFAULT '',
+            `created_at` datetime NOT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;");
+    }
+
+    protected function ensureUpdateCursorHistoryTableExists() {
+        $tbl = DB_PREFIX . 'bg_update_cursor_history';
+        $this->db->query("CREATE TABLE IF NOT EXISTS `" . $tbl . "` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `cursor_json` text NOT NULL,
+            `minutes` int(11) NOT NULL DEFAULT 30,
+            `page` int(11) NOT NULL DEFAULT 1,
+            `source` varchar(16) DEFAULT '',
+            `created_at` datetime NOT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;");
+    }
+
+    /**
+     * Save cursor history for fetch (new imports).
+     */
+    public function saveFetchCursorHistory(array $cursor, $source = '') {
+        $this->ensureFetchCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_fetch_cursor_history';
+        $ci = isset($cursor['category_index']) ? (int)$cursor['category_index'] : 0;
+        $page = isset($cursor['page']) ? (int)$cursor['page'] : 1;
+        $offset = isset($cursor['offset']) ? (int)$cursor['offset'] : 0;
+        $src = (string)$source;
+        if (strlen($src) > 16) $src = substr($src, 0, 16);
+        $cursorJson = json_encode(array('category_index' => $ci, 'page' => $page, 'offset' => $offset));
+        $now = date('Y-m-d H:i:s');
+        $this->db->query(
+            "INSERT INTO `" . $tbl . "` (`cursor_json`,`category_index`,`page`,`offset`,`source`,`created_at`)
+             VALUES ('" . $this->db->escape($cursorJson) . "','" . (int)$ci . "','" . (int)$page . "','" . (int)$offset . "','" . $this->db->escape($src) . "','" . $this->db->escape($now) . "')"
+        );
+        // Keep only last 10 entries
+        $this->db->query(
+            "DELETE FROM `" . $tbl . "` WHERE `id` NOT IN (
+                SELECT `id` FROM (SELECT `id` FROM `" . $tbl . "` ORDER BY `id` DESC LIMIT 10) t
+            )"
+        );
+    }
+
+    /**
+     * Save cursor history for updates (GetProductUpdateList).
+     */
+    public function saveUpdateCursorHistory($minutes, $page, $source = '') {
+        $this->ensureUpdateCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_update_cursor_history';
+        $min = (int)$minutes;
+        if ($min < 1) $min = 1;
+        $pg = (int)$page;
+        if ($pg < 1) $pg = 1;
+        $src = (string)$source;
+        if (strlen($src) > 16) $src = substr($src, 0, 16);
+        $cursorJson = json_encode(array('minutes' => $min, 'page' => $pg));
+        $now = date('Y-m-d H:i:s');
+        $this->db->query(
+            "INSERT INTO `" . $tbl . "` (`cursor_json`,`minutes`,`page`,`source`,`created_at`)
+             VALUES ('" . $this->db->escape($cursorJson) . "','" . (int)$min . "','" . (int)$pg . "','" . $this->db->escape($src) . "','" . $this->db->escape($now) . "')"
+        );
+        // Keep only last 10 entries
+        $this->db->query(
+            "DELETE FROM `" . $tbl . "` WHERE `id` NOT IN (
+                SELECT `id` FROM (SELECT `id` FROM `" . $tbl . "` ORDER BY `id` DESC LIMIT 10) t
+            )"
+        );
+    }
+
+    /**
+     * Return last N fetch cursor history rows.
+     */
+    public function getFetchCursorHistory($limit = 10) {
+        $this->ensureFetchCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_fetch_cursor_history';
+        $limit = (int)$limit;
+        if ($limit < 1) $limit = 1;
+        if ($limit > 50) $limit = 50;
+        $qr = $this->db->query("SELECT `id`,`category_index`,`page`,`offset`,`cursor_json`,`source`,`created_at` FROM `" . $tbl . "` ORDER BY `id` DESC LIMIT " . (int)$limit);
+        return $qr ? $qr->rows : array();
+    }
+
+    public function getUpdateCursorHistory($limit = 10) {
+        $this->ensureUpdateCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_update_cursor_history';
+        $limit = (int)$limit;
+        if ($limit < 1) $limit = 1;
+        if ($limit > 50) $limit = 50;
+        $qr = $this->db->query("SELECT `id`,`minutes`,`page`,`cursor_json`,`source`,`created_at` FROM `" . $tbl . "` ORDER BY `id` DESC LIMIT " . (int)$limit);
+        return $qr ? $qr->rows : array();
+    }
+
+    public function getFetchCursorHistoryById($id) {
+        $this->ensureFetchCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_fetch_cursor_history';
+        $id = (int)$id;
+        if ($id < 1) return null;
+        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE `id` = " . (int)$id . " LIMIT 1");
+        if ($qr && $qr->num_rows) return $qr->row;
+        return null;
+    }
+
+    public function getUpdateCursorHistoryById($id) {
+        $this->ensureUpdateCursorHistoryTableExists();
+        $tbl = DB_PREFIX . 'bg_update_cursor_history';
+        $id = (int)$id;
+        if ($id < 1) return null;
+        $qr = $this->db->query("SELECT * FROM `" . $tbl . "` WHERE `id` = " . (int)$id . " LIMIT 1");
+        if ($qr && $qr->num_rows) return $qr->row;
+        return null;
+    }
+
+    /**
      * Persist an array of normalized products into the fetched-products table.
      * Each product array should contain at least 'product_id' and optionally other fields.
      * Returns number of rows processed (attempted inserts/updates).
