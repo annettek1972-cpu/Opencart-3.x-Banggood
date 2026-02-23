@@ -14,32 +14,36 @@
   }
 
   // IMPORTANT:
-  // `oc_product_variant.option_key` in this repo is based on OpenCart `option_value_id`
-  // (your examples look like "3,9,12"), NOT `product_option_value_id` (often large).
-  // So we collect option_value_id from `data-ov` where available, falling back to the form value.
+  // `oc_product_variant.option_key` is stored using product_option_value_id.
+  // So we collect the form value first (product_option_value_id),
+  // and only fall back to option_value_id (data-ov) if needed.
   function collectPovIds() {
     var ids = [];
 
     $('select[name^="option["]').each(function () {
       var $sel = $(this);
+      var v = $sel.val();
+      if (v) {
+        ids.push(String(v));
+        return;
+      }
       var ov = $sel.find('option:selected').data('ov');
       if (ov !== undefined && ov !== null && String(ov) !== '') {
         ids.push(String(ov));
-        return;
       }
-      var v = $sel.val();
-      if (v) ids.push(String(v));
     });
 
     $('input[type="radio"][name^="option["]:checked, input[type="checkbox"][name^="option["]:checked').each(function () {
       var $inp = $(this);
+      var v2 = $inp.val();
+      if (v2) {
+        ids.push(String(v2));
+        return;
+      }
       var ov2 = $inp.data('ov');
       if (ov2 !== undefined && ov2 !== null && String(ov2) !== '') {
         ids.push(String(ov2));
-        return;
       }
-      var v2 = $inp.val();
-      if (v2) ids.push(String(v2));
     });
 
     // de-dupe
@@ -258,28 +262,31 @@
     var upper = token.toUpperCase();
 
     if (upper.indexOf('LC_STOCK_MSG_EXPECT') === 0) {
-      // EXPECT == sold out/backorder messaging; request wants Sold Out
+      // EXPECT == out of stock with expected date
       var m = upper.match(/^LC_STOCK_MSG_EXPECT_(\d+)$/);
       if (m) {
         var d = parseInt(m[1], 10);
-        if (!isNaN(d) && d > 0) return 'Stock Expected In ' + d + ' ' + (d === 1 ? 'day' : 'days');
+        if (!isNaN(d) && d > 0) return 'Out Of Stock, Expected In ' + d + ' ' + (d === 1 ? 'Day' : 'Days');
       }
-      return 'Sold Out';
+      return 'Out Of Stock, Expected Date Unknown';
     }
 
     if (upper.indexOf('LC_STOCK_MSG_SOLD') === 0 || upper.indexOf('SOLD_OUT') !== -1 || upper.indexOf('OUT_OF_STOCK') !== -1) {
-      return 'Sold Out';
+      return 'Out Of Stock, No Expected Date';
     }
 
     var md = upper.match(/^LC_STOCK_MSG_(\d+)_DAYS$/);
     if (md) {
       var days = parseInt(md[1], 10);
-      if (!isNaN(days) && days > 0) return 'ships in ' + days * 24 + ' hours';
+      if (!isNaN(days) && days > 0) {
+        var hrs = days * 24;
+        return 'In Stock Ships In ' + hrs + ' ' + (hrs === 1 ? 'Hour' : 'Hours');
+      }
     }
     var mh = upper.match(/^LC_STOCK_MSG_(\d+)_HOURS$/);
     if (mh) {
       var hours = parseInt(mh[1], 10);
-      if (!isNaN(hours) && hours > 0) return 'ships in ' + hours + ' hours';
+      if (!isNaN(hours) && hours > 0) return 'In Stock Ships In ' + hours + ' ' + (hours === 1 ? 'Hour' : 'Hours');
     }
 
     // Also handle the doc example ("In stock, usually dispatched in 1 business day")

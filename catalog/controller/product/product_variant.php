@@ -26,25 +26,28 @@ class ControllerProductProductVariant extends Controller {
 
 		// Common Banggood tokens the user referenced
 		if (strpos($upper, 'LC_STOCK_MSG_EXPECT') === 0) {
-			// Many sites treat EXPECT as sold out/backorder messaging; per request show Sold Out
+			// Expected/backorder messaging
 			if (preg_match('/^LC_STOCK_MSG_EXPECT_(\d+)$/i', $upper, $m)) {
 				$d = (int)$m[1];
-				if ($d > 0) return 'Stock Expected In ' . $d . ' ' . ($d === 1 ? 'day' : 'days');
+				if ($d > 0) return 'Out Of Stock, Expected In ' . $d . ' ' . ($d === 1 ? 'Day' : 'Days');
 			}
-			return 'Sold Out';
+			return 'Out Of Stock, Expected Date Unknown';
 		}
 
 		if (strpos($upper, 'LC_STOCK_MSG_SOLD') === 0 || strpos($upper, 'SOLD_OUT') !== false || strpos($upper, 'OUT_OF_STOCK') !== false) {
-			return 'Sold Out';
+			return 'Out Of Stock, No Expected Date';
 		}
 
 		if (preg_match('/^LC_STOCK_MSG_(\d+)_DAYS$/i', $upper, $m)) {
 			$days = (int)$m[1];
-			if ($days > 0) return 'ships in ' . ($days * 24) . ' hours';
+			if ($days > 0) {
+				$hrs = $days * 24;
+				return 'In Stock Ships In ' . $hrs . ' ' . ($hrs === 1 ? 'Hour' : 'Hours');
+			}
 		}
 		if (preg_match('/^LC_STOCK_MSG_(\d+)_HOURS$/i', $upper, $m)) {
 			$hours = (int)$m[1];
-			if ($hours > 0) return 'ships in ' . $hours . ' hours';
+			if ($hours > 0) return 'In Stock Ships In ' . $hours . ' ' . ($hours === 1 ? 'Hour' : 'Hours');
 		}
 
 		// If API returns a full English phrase, pass through unchanged
@@ -100,17 +103,60 @@ class ControllerProductProductVariant extends Controller {
 			$pipe_norm = implode('|', $pov_ids);
 
 			$tbl = DB_PREFIX . 'product_variant';
+			$optionKeys = array($raw_key, $norm, $sorted_norm, $pipe_norm);
+
+			// If client sends option_value_id, map to product_option_value_id for this product.
+			$mapped_pov_ids = array();
+			try {
+				$ids = $pov_ids;
+				if (!empty($ids)) {
+					$qmap = $this->db->query(
+						"SELECT product_option_value_id, option_value_id
+						 FROM `" . DB_PREFIX . "product_option_value`
+						 WHERE product_id = " . (int)$product_id . "
+						   AND option_value_id IN (" . implode(',', array_map('intval', $ids)) . ")"
+					);
+					$ov_to_pov = array();
+					if ($qmap && $qmap->num_rows) {
+						foreach ($qmap->rows as $r) {
+							$ov_to_pov[(int)$r['option_value_id']] = (int)$r['product_option_value_id'];
+						}
+					}
+					foreach ($ids as $ov) {
+						if (isset($ov_to_pov[$ov]) && (int)$ov_to_pov[$ov] > 0) {
+							$mapped_pov_ids[] = (int)$ov_to_pov[$ov];
+						}
+					}
+					$mapped_pov_ids = array_values(array_unique($mapped_pov_ids));
+					if (!empty($mapped_pov_ids) && count($mapped_pov_ids) === count($pov_ids)) {
+						$mapped_norm = implode(',', $mapped_pov_ids);
+						$mapped_sorted = $mapped_pov_ids; sort($mapped_sorted, SORT_NUMERIC);
+						$mapped_sorted_norm = implode(',', $mapped_sorted);
+						$mapped_pipe = implode('|', $mapped_pov_ids);
+						$optionKeys[] = $mapped_norm;
+						$optionKeys[] = $mapped_sorted_norm;
+						$optionKeys[] = $mapped_pipe;
+					} else {
+						$mapped_pov_ids = array();
+					}
+				}
+			} catch (\Throwable $e) {
+				$mapped_pov_ids = array();
+			}
+
+			$optionKeys = array_values(array_unique(array_filter(array_map('strval', $optionKeys), function($v){ return $v !== ''; })));
+			$keySql = '';
+			if (!empty($optionKeys)) {
+				$esc = array();
+				foreach ($optionKeys as $k) $esc[] = "'" . $this->db->escape($k) . "'";
+				$keySql = implode(',', $esc);
+			}
 
 			$q = $this->db->query(
 				"SELECT variant_id, option_key, option_text, quantity, price, stock_status_token
 				 FROM `" . $tbl . "`
 				 WHERE product_id = " . (int)$product_id . "
-				   AND option_key IN (
-					 '" . $this->db->escape($raw_key) . "',
-					 '" . $this->db->escape($norm) . "',
-					 '" . $this->db->escape($sorted_norm) . "',
-					 '" . $this->db->escape($pipe_norm) . "'
-				   )
+				   AND option_key IN (" . ($keySql !== '' ? $keySql : "''") . ")
 				 ORDER BY (stock_status_token IS NOT NULL AND stock_status_token <> '') DESC, variant_id DESC
 				 LIMIT 1"
 			);
@@ -129,7 +175,12 @@ class ControllerProductProductVariant extends Controller {
 						$p = preg_split('/[,\|\s;]+/', trim($ok));
 						$p = array_values(array_unique(array_map('intval', array_filter(array_map('trim', $p), function($v){ return $v !== ''; }))));
 						sort($p, SORT_NUMERIC);
-						if ($p === $sorted) {
+						$match = ($p === $sorted);
+						if (!$match && !empty($mapped_pov_ids)) {
+							$mapped_sorted = $mapped_pov_ids; sort($mapped_sorted, SORT_NUMERIC);
+							if ($p === $mapped_sorted) $match = true;
+						}
+						if ($match) {
 							// Prefer a row that has a stock_status_token
 							if ($best === null) {
 								$best = $r;

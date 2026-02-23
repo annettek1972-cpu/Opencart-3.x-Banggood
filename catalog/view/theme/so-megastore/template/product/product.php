@@ -1485,27 +1485,29 @@ $(document).ready(function(){
         return text.trim();
     }
 
-    // Prefer option_value_id (data-ov) where available — fallback to product_option_value_id
+    // Prefer product_option_value_id (form value) — fallback to option_value_id (data-ov)
     function collectSelectedOptionValueIds() {
         var ids = [];
         $('select[name^="option["]').each(function() {
-            // prefer option_value_id from the selected <option data-ov="...">
-            var ov = $(this).find('option:selected').data('ov');
-            if (ov !== undefined && ov !== null && ov !== '') {
-                ids.push(String(ov));
+            var pov = $(this).val();
+            if (pov) {
+                ids.push(String(pov));
             } else {
-                var pov = $(this).val();
-                if (pov) ids.push(String(pov));
+                var ov = $(this).find('option:selected').data('ov');
+                if (ov !== undefined && ov !== null && ov !== '') {
+                    ids.push(String(ov));
+                }
             }
         });
         $('input[type="radio"][name^="option["]:checked, input[type="checkbox"][name^="option["]:checked').each(function(){
-            // prefer data-ov attribute on the input
-            var ov = $(this).data('ov');
-            if (ov !== undefined && ov !== null && ov !== '') {
-                ids.push(String(ov));
+            var pov = $(this).val();
+            if (pov) {
+                ids.push(String(pov));
             } else {
-                var pov = $(this).val();
-                if (pov) ids.push(String(pov));
+                var ov = $(this).data('ov');
+                if (ov !== undefined && ov !== null && ov !== '') {
+                    ids.push(String(ov));
+                }
             }
         });
         // remove duplicates while preserving order
